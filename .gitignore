@@ -1,0 +1,6 @@
+.env
+factory.db
+__pycache__/
+node_modules/
+*.pyc
+.claude/settings.local.json

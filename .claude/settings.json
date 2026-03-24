@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "linear-mcp-server"],
+      "env": {
+        "LINEAR_API_KEY": "${LINEAR_API_KEY}"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+    "railway": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-railway"],
+      "env": {
+        "RAILWAY_API_TOKEN": "${RAILWAY_TOKEN}"
+      }
+    },
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {
+        "SLACK_BOT_TOKEN": "${SLACK_TOKEN}"
+      }
+    }
+  }
+}

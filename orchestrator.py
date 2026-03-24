@@ -1,0 +1,477 @@
+"""
+Software Factory Orchestrator
+FastAPI webhook server + LangGraph state machine in one file.
+Receives Linear webhook events, routes them through a pipeline of
+Claude Code agents, and pauses at three human gates.
+"""
+
+import os
+import asyncio
+import json
+import hmac
+import hashlib
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TypedDict, Annotated, Any
+from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+import httpx
+from langgraph.graph import StateGraph, END
+from langgraph.types import interrupt, Command
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+MEMORY_DIR = Path("memory")
+AUDIT_DIR = Path("audit")
+TEMPLATE_PATH = MEMORY_DIR / "_template.md"
+SKILLS_DIR = Path(".claude/skills")
+DB_PATH = "factory.db"
+
+LINEAR_API_KEY = os.getenv("LINEAR_API_KEY", "")
+LINEAR_WEBHOOK_SECRET = os.getenv("LINEAR_WEBHOOK_SECRET", "")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+AGENT_TIMEOUT = 300  # 5 minutes
+
+logger = logging.getLogger("factory")
+logging.basicConfig(level=logging.INFO)
+
+# Cache: Linear state UUID -> state name
+_state_name_cache: dict[str, str] = {}
+
+# ---------------------------------------------------------------------------
+# State map: Linear state name -> graph node(s)
+# ---------------------------------------------------------------------------
+
+STATE_MAP: dict[str, str] = {
+    "In Spec": "pm_agent",
+    "In Arch": "architect_agent",
+    "In Dev": "dev_agent",
+    "In QA": "qa_fanout",
+    "In Deploy": "deploy_agent",
+}
+
+
+# ---------------------------------------------------------------------------
+# LangGraph state schema
+# ---------------------------------------------------------------------------
+
+
+class FactoryState(TypedDict):
+    ticket_id: str
+    title: str
+    current_state: str
+    error: str
+
+
+# ---------------------------------------------------------------------------
+# Audit logging
+# ---------------------------------------------------------------------------
+
+
+def audit_log(ticket_id: str, event: str, detail: str = "") -> None:
+    AUDIT_DIR.mkdir(exist_ok=True)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ts = datetime.now(timezone.utc).isoformat()
+    line = f"[{ts}] {ticket_id} | {event} | {detail}\n"
+    (AUDIT_DIR / f"{today}.log").open("a").write(line)
+    logger.info(line.strip())
+
+
+# ---------------------------------------------------------------------------
+# Memory helpers
+# ---------------------------------------------------------------------------
+
+
+def init_memory(ticket_id: str, title: str) -> Path:
+    path = MEMORY_DIR / f"{ticket_id}.md"
+    if path.exists():
+        return path
+    MEMORY_DIR.mkdir(exist_ok=True)
+    template = TEMPLATE_PATH.read_text()
+    content = template.replace("{{TICKET_ID}}", ticket_id).replace("{{TICKET_TITLE}}", title)
+    path.write_text(content)
+    audit_log(ticket_id, "memory_init", str(path))
+    return path
+
+
+def append_memory(ticket_id: str, section: str, content: str) -> None:
+    path = MEMORY_DIR / f"{ticket_id}.md"
+    ts = datetime.now(timezone.utc).isoformat()
+    text = path.read_text()
+    marker = f"## {section}"
+    if marker in text:
+        text = text.replace(
+            f"{marker}\n_pending_",
+            f"{marker}\n_{ts}_\n\n{content}",
+        )
+        path.write_text(text)
+    else:
+        with path.open("a") as f:
+            f.write(f"\n{marker}\n_{ts}_\n\n{content}\n")
+    audit_log(ticket_id, f"memory_append:{section}", f"{len(content)} chars")
+
+
+# ---------------------------------------------------------------------------
+# Linear API helpers
+# ---------------------------------------------------------------------------
+
+LINEAR_GQL = "https://api.linear.app/graphql"
+
+
+async def _linear_gql(query: str) -> dict:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(LINEAR_GQL, json={"query": query}, headers={"Authorization": LINEAR_API_KEY})
+    return resp.json() if resp.status_code == 200 else {}
+
+
+async def resolve_state_name(state_id: str) -> str | None:
+    if state_id in _state_name_cache:
+        return _state_name_cache[state_id]
+    data = await _linear_gql('{ workflowState(id: "%s") { name } }' % state_id)
+    name = data.get("data", {}).get("workflowState", {}).get("name")
+    if name:
+        _state_name_cache[state_id] = name
+    return name
+
+
+async def update_linear_state(ticket_id: str, state_name: str) -> None:
+    data = await _linear_gql('{ workflowStates(filter: { name: { eq: "%s" } }) { nodes { id } } }' % state_name)
+    nodes = data.get("data", {}).get("workflowStates", {}).get("nodes", [])
+    if not nodes:
+        audit_log(ticket_id, "linear_update_failed", f"State '{state_name}' not found")
+        return
+    number = ticket_id.replace("LIN-", "")
+    data = await _linear_gql('{ issues(filter: { number: { eq: %s } }) { nodes { id } } }' % number)
+    issues = data.get("data", {}).get("issues", {}).get("nodes", [])
+    if not issues:
+        return
+    await _linear_gql('mutation { issueUpdate(id: "%s", input: { stateId: "%s" }) { success } }' % (issues[0]["id"], nodes[0]["id"]))
+    audit_log(ticket_id, "linear_state_update", state_name)
+
+
+# ---------------------------------------------------------------------------
+# Slack helper
+# ---------------------------------------------------------------------------
+
+
+async def post_slack(message: str) -> None:
+    if not SLACK_WEBHOOK_URL:
+        logger.warning("SLACK_WEBHOOK_URL not set, skipping: %s", message)
+        return
+    async with httpx.AsyncClient() as client:
+        await client.post(SLACK_WEBHOOK_URL, json={"text": message})
+
+
+# ---------------------------------------------------------------------------
+# Agent runner
+# ---------------------------------------------------------------------------
+
+
+async def run_agent(
+    state: FactoryState, skill_file: str, memory_section: str,
+    next_linear_state: str | None = None,
+) -> FactoryState:
+    """Spawn a Claude Code session for the given skill and append output to memory."""
+    ticket_id = state["ticket_id"]
+    memory_content = (MEMORY_DIR / f"{ticket_id}.md").read_text()
+    skill_content = (SKILLS_DIR / skill_file).read_text()
+    prompt = (
+        f"You are working on ticket {ticket_id}: {state['title']}\n\n"
+        f"## Memory File\n\n{memory_content}\n\n"
+        f"## Your Skill Instructions\n\n{skill_content}"
+    )
+    audit_log(ticket_id, f"agent_start:{memory_section}", skill_file)
+    try:
+        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
+        options = ClaudeAgentOptions(
+            cwd="/app",
+            permission_mode="bypassPermissions",
+            allowed_tools=[
+                "Read", "Write", "Edit", "Bash", "Glob", "Grep",
+                "mcp__linear__*", "mcp__github__*",
+                "mcp__railway__*", "mcp__slack__*",
+            ],
+        )
+        output_parts: list[str] = []
+        async for message in claude_query(prompt=prompt, options=options):
+            if hasattr(message, "content"):
+                for block in message.content:
+                    if hasattr(block, "text"):
+                        output_parts.append(block.text)
+        output = "\n".join(output_parts)
+    except ImportError:
+        output = f"[STUB] {memory_section} completed for {ticket_id}"
+        logger.warning("claude-agent-sdk not available, using stub")
+    append_memory(ticket_id, memory_section, output)
+    if next_linear_state:
+        await update_linear_state(ticket_id, next_linear_state)
+    audit_log(ticket_id, f"agent_done:{memory_section}", f"{len(output)} chars")
+    return {**state, "current_state": memory_section}
+
+
+# ---------------------------------------------------------------------------
+# Agent node functions
+# ---------------------------------------------------------------------------
+
+
+async def pm_agent(state: FactoryState) -> FactoryState:
+    return await run_agent(state, "spec-writing.md", "Spec")
+
+async def architect_agent(state: FactoryState) -> FactoryState:
+    return await run_agent(state, "architecture.md", "Architecture Decision")
+
+async def dev_agent(state: FactoryState) -> FactoryState:
+    return await run_agent(state, "coding.md", "Implementation", next_linear_state="In QA")
+
+async def review_agent(state: FactoryState) -> FactoryState:
+    return await run_agent(state, "code-review.md", "Code Review")
+
+async def test_agent(state: FactoryState) -> FactoryState:
+    return await run_agent(state, "test-writing.md", "Test Results")
+
+async def deploy_agent(state: FactoryState) -> FactoryState:
+    return await run_agent(state, "deploy-checklist.md", "Deploy Log", next_linear_state="Done")
+
+
+# ---------------------------------------------------------------------------
+# Gate node functions
+# ---------------------------------------------------------------------------
+
+
+async def gate(state: FactoryState, gate_name: str, next_state_hint: str) -> FactoryState:
+    ticket_id = state["ticket_id"]
+    await post_slack(
+        f":factory: *{gate_name}* — `{ticket_id}`: {state['title']}\n"
+        f"Review the output and move the ticket to *{next_state_hint}* to proceed, "
+        f"or *Blocked* to reject."
+    )
+    audit_log(ticket_id, gate_name, "waiting for human approval")
+
+    decision = interrupt({"gate": gate_name, "ticket_id": ticket_id})
+
+    if decision == "Blocked":
+        error_msg = f"Rejected by human at {gate_name}"
+        append_memory(ticket_id, "Error", error_msg)
+        await post_slack(f":x: `{ticket_id}` blocked at {gate_name}")
+        audit_log(ticket_id, "blocked", gate_name)
+        return {**state, "current_state": "Blocked", "error": error_msg}
+
+    audit_log(ticket_id, f"{gate_name}_approved", decision)
+    return state
+
+
+async def gate_1(state: FactoryState) -> FactoryState:
+    return await gate(state, "Gate 1: Spec Review", "In Arch")
+
+
+async def gate_2(state: FactoryState) -> FactoryState:
+    return await gate(state, "Gate 2: Architecture Review", "In Dev")
+
+
+async def gate_3(state: FactoryState) -> FactoryState:
+    return await gate(state, "Gate 3: QA Review", "In Deploy")
+
+
+# ---------------------------------------------------------------------------
+# Terminal nodes
+# ---------------------------------------------------------------------------
+
+
+async def done_handler(state: FactoryState) -> FactoryState:
+    ticket_id = state["ticket_id"]
+    await post_slack(f":white_check_mark: `{ticket_id}`: {state['title']} — deployed successfully!")
+    audit_log(ticket_id, "done", "pipeline complete")
+    return {**state, "current_state": "Done"}
+
+
+async def blocked_handler(state: FactoryState) -> FactoryState:
+    ticket_id = state["ticket_id"]
+    await update_linear_state(ticket_id, "Blocked")
+    await post_slack(f":x: `{ticket_id}` is blocked: {state.get('error', 'unknown')}")
+    audit_log(ticket_id, "blocked", state.get("error", ""))
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Graph construction
+# ---------------------------------------------------------------------------
+
+
+def should_block(state: FactoryState) -> str:
+    if state.get("error") or state.get("current_state") == "Blocked":
+        return "blocked_handler"
+    return "continue"
+
+
+builder = StateGraph(FactoryState)
+
+# Nodes
+builder.add_node("pm_agent", pm_agent)
+builder.add_node("gate_1", gate_1)
+builder.add_node("architect_agent", architect_agent)
+builder.add_node("gate_2", gate_2)
+builder.add_node("dev_agent", dev_agent)
+builder.add_node("review_agent", review_agent)
+builder.add_node("test_agent", test_agent)
+builder.add_node("gate_3", gate_3)
+builder.add_node("deploy_agent", deploy_agent)
+builder.add_node("done_handler", done_handler)
+builder.add_node("blocked_handler", blocked_handler)
+
+# Edges: linear pipeline with parallel fan-out for QA
+builder.set_entry_point("pm_agent")
+builder.add_conditional_edges("pm_agent", should_block, {"blocked_handler": "blocked_handler", "continue": "gate_1"})
+builder.add_edge("gate_1", "architect_agent")
+builder.add_conditional_edges("architect_agent", should_block, {"blocked_handler": "blocked_handler", "continue": "gate_2"})
+builder.add_edge("gate_2", "dev_agent")
+
+# Fan-out: dev -> review + test in parallel
+builder.add_conditional_edges("dev_agent", should_block, {
+    "blocked_handler": "blocked_handler",
+    "continue": "review_agent",
+})
+builder.add_edge("dev_agent", "test_agent")
+
+# Fan-in: both QA agents -> gate_3
+builder.add_edge("review_agent", "gate_3")
+builder.add_edge("test_agent", "gate_3")
+
+builder.add_edge("gate_3", "deploy_agent")
+builder.add_conditional_edges("deploy_agent", should_block, {"blocked_handler": "blocked_handler", "continue": "done_handler"})
+builder.add_edge("done_handler", END)
+builder.add_edge("blocked_handler", END)
+
+# Graph is compiled in the lifespan with the checkpointer
+graph = None
+
+
+# ---------------------------------------------------------------------------
+# Error / timeout handlers
+# ---------------------------------------------------------------------------
+
+
+async def handle_timeout(ticket_id: str) -> None:
+    append_memory(ticket_id, "Error", "Agent timed out after 5 minutes")
+    await update_linear_state(ticket_id, "Blocked")
+    await post_slack(f":warning: `{ticket_id}` — agent timed out after 5 minutes. Ticket moved to Blocked.")
+    audit_log(ticket_id, "timeout", "5 minute limit exceeded")
+
+
+async def handle_error(ticket_id: str, error: str) -> None:
+    append_memory(ticket_id, "Error", f"Pipeline error: {error}")
+    await update_linear_state(ticket_id, "Blocked")
+    await post_slack(f":x: `{ticket_id}` — pipeline error: {error}")
+    audit_log(ticket_id, "error", error)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline runner (background task)
+# ---------------------------------------------------------------------------
+
+
+async def run_pipeline(ticket_id: str, title: str, state_name: str) -> None:
+    config = {"configurable": {"thread_id": ticket_id}}
+    try:
+        # Check if there is an existing interrupted thread for this ticket
+        existing = await graph.aget_state(config)
+        if existing and existing.values and existing.tasks:
+            # Resume from interrupt — pass the new state name so the gate
+            # node knows what the human decided
+            audit_log(ticket_id, "pipeline_resume", state_name)
+            await asyncio.wait_for(
+                graph.ainvoke(Command(resume=state_name), config),
+                timeout=AGENT_TIMEOUT,
+            )
+        else:
+            # New ticket — start the pipeline from scratch
+            initial: FactoryState = {
+                "ticket_id": ticket_id,
+                "title": title,
+                "current_state": state_name,
+                "error": "",
+            }
+            audit_log(ticket_id, "pipeline_start", state_name)
+            await asyncio.wait_for(
+                graph.ainvoke(initial, config),
+                timeout=AGENT_TIMEOUT,
+            )
+        audit_log(ticket_id, "pipeline_step_complete", state_name)
+    except asyncio.TimeoutError:
+        await handle_timeout(ticket_id)
+    except Exception as e:
+        await handle_error(ticket_id, str(e))
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global graph
+    async with AsyncSqliteSaver.from_conn_string(DB_PATH) as checkpointer:
+        graph = builder.compile(checkpointer=checkpointer)
+        logger.info("Factory orchestrator started, graph compiled with SQLite checkpointer")
+        yield
+
+
+app = FastAPI(title="Software Factory", lifespan=lifespan)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.post("/webhook/linear")
+async def webhook_linear(request: Request, background_tasks: BackgroundTasks):
+    body = await request.body()
+
+    # Verify webhook signature if secret is configured
+    if LINEAR_WEBHOOK_SECRET:
+        signature = request.headers.get("Linear-Signature", "")
+        expected = hmac.new(
+            LINEAR_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+    payload = json.loads(body)
+
+    # Only process issue state changes
+    if payload.get("type") != "Issue" or payload.get("action") != "update":
+        return {"ok": True, "skipped": True}
+
+    data = payload.get("data", {})
+    state_id = data.get("stateId")
+    if not state_id:
+        return {"ok": True, "skipped": True}
+
+    # Resolve the Linear state name from UUID
+    state_name = await resolve_state_name(state_id)
+    if not state_name or state_name not in STATE_MAP:
+        return {"ok": True, "skipped": True, "state": state_name}
+
+    # Extract ticket info
+    ticket_number = data.get("number")
+    ticket_id = f"LIN-{ticket_number}"
+    title = data.get("title", "Untitled")
+
+    audit_log(ticket_id, "webhook_received", f"{state_name} (stateId={state_id})")
+
+    # Initialize memory file if this is a new ticket
+    init_memory(ticket_id, title)
+
+    # Run the pipeline in the background so the webhook returns immediately
+    background_tasks.add_task(run_pipeline, ticket_id, title, state_name)
+
+    return {"ok": True, "ticket": ticket_id, "state": state_name}
