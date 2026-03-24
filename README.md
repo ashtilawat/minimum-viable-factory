@@ -1,18 +1,30 @@
 # Minimum Viable Factory
 
-Most AI agent demos show you a single agent doing a single task. This is a full factory — six agents, three human gates, one orchestrator, zero complexity you can't read in a sitting.
+What if you could write a Linear ticket and have working code deployed by the time you finish lunch?
 
-You create a Linear ticket. A PM agent writes the spec. An architect plans the implementation. A dev agent writes the code and opens a PR. Review and test agents run in parallel. A deploy agent ships it to Railway. You approve at three gates via Slack. That's it.
+That's what this does. Six Claude Code agents pass a ticket through spec, architecture, code, review, tests, and deploy. You approve at three Slack gates. One orchestrator file runs the whole thing.
 
-**~480 lines of orchestrator. 6 skills. 4 MCPs. The factory is simpler than what it builds.**
+**~500 lines of Python. 6 skills. 4 MCPs. You can read every file in one sitting.**
 
-## Why Try This
+## The 11 Primitives Every Software Factory Needs
 
-- **It actually runs.** This isn't a diagram or a whitepaper. Clone it, add your keys, create a ticket, and watch agents build a web app.
-- **You can read the whole thing.** The orchestrator is one file. Each skill is one page of markdown. There are no abstractions to chase.
-- **Human-in-the-loop by default.** Three gates where the pipeline pauses and waits for you. You stay in control without doing the work.
-- **Agents share memory, not messages.** Every agent reads and writes to one append-only markdown file per ticket. No agent-to-agent chatter. The memory file is the source of truth.
-- **It's a starting point.** Swap Railway for Vercel. Swap Linear for Jira. Swap the skills for your conventions. The pattern is the point.
+We tried to figure out the smallest set of building blocks that turns "ticket in" to "deployed app out." Here's what we landed on:
+
+| # | Primitive | What It Does | This Factory Uses |
+|---|---|---|---|
+| 1 | **Record** | Where work gets tracked | Linear |
+| 2 | **Memory** | How agents share context | `memory/` — one markdown file per ticket, append-only |
+| 3 | **Orchestrator** | What decides who runs next | LangGraph state machine in `orchestrator.py` |
+| 4 | **Execution Env** | Where agents actually run | Docker container |
+| 5 | **Agent Runtime** | The brain behind each agent | Claude Code via `claude-agent-sdk` |
+| 6 | **Integration Layer** | How agents talk to external tools | 4 MCPs: Linear, GitHub, Railway, Slack |
+| 7 | **Quality Gates** | Where humans stay in the loop | LangGraph `interrupt()` + Slack notifications |
+| 8 | **Delivery Target** | Where the app gets deployed | Railway |
+| 9 | **Observability** | How you see what's happening | LangSmith traces + Railway logs |
+| 10 | **Skills** | What each agent knows how to do | `.claude/skills/` — 6 markdown files |
+| 11 | **Identity & Secrets** | How agents authenticate | `.env` file mounted into Docker |
+
+Swap any of these out. Use Jira instead of Linear. Deploy to Vercel instead of Railway. The primitives are the pattern. The tools are interchangeable.
 
 ## How It Works
 
@@ -23,34 +35,35 @@ Webhook fires --> orchestrator.py
         |
 PM Agent writes spec --> memory/LIN-xxx.md
         |
-[GATE 1] Slack notification --> human approves
+[GATE 1] Slack: "Spec ready. Move to In Arch to approve."
         |
 Architect Agent writes technical plan
         |
-[GATE 2] Slack notification --> human approves
+[GATE 2] Slack: "Architecture ready. Move to In Dev to approve."
         |
-Dev Agent writes code --> opens PR
+Dev Agent writes code, opens PR
         |
 Review Agent + Test Agent run in parallel
         |
-[GATE 3] Slack notification --> human approves
+[GATE 3] Slack: "QA passed. Move to In Deploy to approve."
         |
 Deploy Agent ships to Railway
         |
 Done
 ```
 
-Each agent is a Claude Code session (via `claude-agent-sdk`) running inside Docker. The orchestrator is a LangGraph state machine that routes Linear webhooks to agents and pauses at gates.
+Each agent is a Claude Code session running inside Docker. It reads the full memory file, follows its skill instructions, appends its output, and moves on. No agent-to-agent chatter. The memory file is the only shared state.
 
-## Prerequisites
+## Try It
+
+### What you need
 
 - [Docker](https://docs.docker.com/get-docker/)
-- [ngrok](https://ngrok.com/) (or any tunnel to expose localhost)
-- Accounts and API keys for: [Anthropic](https://console.anthropic.com/), [Linear](https://linear.app/), [GitHub](https://github.com/), [Railway](https://railway.app/), [Slack](https://api.slack.com/), [LangSmith](https://smith.langchain.com/) (optional)
+- [ngrok](https://ngrok.com/) (or any tunnel to expose port 8000)
+- API keys for [Anthropic](https://console.anthropic.com/), [Linear](https://linear.app/), [GitHub](https://github.com/), [Railway](https://railway.app/), [Slack](https://api.slack.com/)
+- [LangSmith](https://smith.langchain.com/) (optional, for tracing)
 
-## Setup
-
-### 1. Clone and configure
+### 1. Clone and add your keys
 
 ```bash
 git clone https://github.com/ashtilawat/minimum-viable-factory.git
@@ -58,7 +71,7 @@ cd minimum-viable-factory
 cp .env.example .env
 ```
 
-Edit `.env` and fill in your keys:
+Fill in `.env`:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
@@ -68,111 +81,63 @@ GITHUB_TOKEN=ghp_...
 RAILWAY_TOKEN=railway_...
 SLACK_TOKEN=xoxb-...
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-LANGCHAIN_API_KEY=lsv2_...          # optional, for tracing
+LANGCHAIN_API_KEY=lsv2_...          # optional
 LANGCHAIN_PROJECT=your-project-name  # optional
 LANGCHAIN_TRACING_V2=true            # optional
 ```
 
-### 2. Set up Linear workflow states
+### 2. Set up Linear
 
-In your Linear team settings, go to **Workflow** and create these states exactly as named:
+Create these workflow states in your team settings (exact names matter):
 
 ```
 Backlog --> In Spec --> In Arch --> In Dev --> In QA --> In Deploy --> Done --> Blocked
 ```
 
-Disable all **Pull request automations** (set every dropdown to "No action") — the orchestrator manages state transitions.
+Turn off all **Pull request automations** — the orchestrator handles state transitions.
 
-### 3. Set up Linear webhook
-
-Start your tunnel:
+### 3. Connect the webhook
 
 ```bash
 ngrok http 8000
 ```
 
-In Linear, go to **Settings > API > Webhooks > New webhook**:
-- **URL**: `https://your-ngrok-url.ngrok-free.app/webhook/linear`
-- **Resource types**: Issues only
+In Linear: **Settings > API > Webhooks > New webhook**
+- URL: `https://your-ngrok-url.ngrok-free.app/webhook/linear`
+- Resource types: Issues only
 
-Copy the signing secret into your `.env` as `LINEAR_WEBHOOK_SECRET`.
+Copy the signing secret to `LINEAR_WEBHOOK_SECRET` in `.env`.
 
 ### 4. Set up Slack
 
-Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps):
-- Add bot scopes: `chat:write`, `channels:read`
-- Install to workspace, copy the **Bot User OAuth Token** (`xoxb-...`) as `SLACK_TOKEN`
-- Enable **Incoming Webhooks**, add one to your channel, copy URL as `SLACK_WEBHOOK_URL`
-- Invite the bot to the channel: `/invite @YourAppName`
+Create an app at [api.slack.com/apps](https://api.slack.com/apps):
+- Bot scopes: `chat:write`, `channels:read`
+- Install to workspace, grab the bot token (`xoxb-...`) for `SLACK_TOKEN`
+- Enable Incoming Webhooks, add one to your channel for `SLACK_WEBHOOK_URL`
+- Invite the bot: `/invite @YourAppName`
 
-### 5. Build and run
+### 5. Start the factory
 
 ```bash
 docker compose build
 docker compose up
 ```
 
-Verify:
-
 ```bash
 curl http://localhost:8000/health
 # {"status":"ok"}
 ```
 
-### 6. Create a ticket
+### 6. Create a ticket and watch it run
 
-Create a Linear ticket with a description of what you want built. Move it to **In Spec**. Watch the factory run:
+Write a Linear ticket describing what you want built. Move it to **In Spec**.
 
-- PM Agent writes a spec and posts to Slack at Gate 1
-- Move to **In Arch** to approve and trigger the Architect Agent
-- Move to **In Dev** to approve and trigger the Dev Agent
-- Review + Test agents run automatically in parallel
-- Move to **In Deploy** to approve and trigger the Deploy Agent
-- Ticket moves to **Done**
+The PM Agent writes a spec. You get a Slack message. Move to **In Arch**. The Architect plans the implementation. Move to **In Dev**. The Dev Agent writes code and opens a PR. Review and test run automatically. Move to **In Deploy**. Done.
 
-## Architecture
-
-### The Eleven Primitives
-
-| Primitive | Tool |
-|---|---|
-| Record | Linear |
-| Memory | `memory/` — append-only markdown, one file per ticket |
-| Orchestrator | LangGraph + FastAPI in `orchestrator.py` |
-| Execution Env | Docker |
-| Agent Runtime | Claude Code (via claude-agent-sdk) |
-| Integration Layer | 4 MCPs: Linear, GitHub, Railway, Slack |
-| Quality Gates | LangGraph interrupts |
-| Delivery Target | Railway |
-| Observability | Railway logs + LangSmith traces |
-| Skills | `.claude/skills/` — 6 markdown skill files |
-| Identity & Secrets | `.env` |
-
-### Agent Roster
-
-| Agent | Triggered By | Skill | Output |
-|---|---|---|---|
-| PM Agent | `In Spec` | spec-writing | Problem statement, acceptance criteria |
-| Architect Agent | `In Arch` | architecture | Technical plan, files affected |
-| Dev Agent | `In Dev` | coding | Code in `app/`, opens PR |
-| Review Agent | `In QA` | code-review | PR review with severity levels |
-| Test Agent | `In QA` | test-writing | Jest tests, coverage report |
-| Deploy Agent | `In Deploy` | deploy-checklist | Railway deploy, health check |
-
-Review and Test agents run in parallel on the same PR.
-
-### Memory
-
-Every ticket gets a file at `memory/LIN-xxx.md`. Agents append output under their section header. The file is append-only — history is never overwritten. Each agent reads the full file to understand what happened before it.
-
-### Gates
-
-Gates are LangGraph `interrupt()` calls. The pipeline pauses, Slack gets a notification, and the orchestrator waits for the human to move the ticket to the next state in Linear. The webhook resumes the graph from the checkpoint stored in SQLite.
-
-## Project Structure
+## What's Inside
 
 ```
-orchestrator.py              # FastAPI + LangGraph state machine (~480 lines)
+orchestrator.py              # The whole state machine (~500 lines)
 memory/
   _template.md               # Bootstrapped for each new ticket
   LIN-xxx.md                 # One file per ticket, append-only
@@ -180,19 +145,17 @@ memory/
   CLAUDE.md                  # Master context for all agent sessions
   settings.json              # MCP server configuration
   skills/
-    spec-writing/SKILL.md
-    architecture/SKILL.md
-    coding/SKILL.md
-    code-review/SKILL.md
-    test-writing/SKILL.md
-    deploy-checklist/SKILL.md
+    spec-writing/SKILL.md    # How to write a spec
+    architecture/SKILL.md    # How to plan implementation
+    coding/SKILL.md          # How to write code and open a PR
+    code-review/SKILL.md     # How to review a PR
+    test-writing/SKILL.md    # How to write and run tests
+    deploy-checklist/SKILL.md # How to deploy and verify
 audit/
-  YYYY-MM-DD.log             # Every factory event
-app/                         # The web app being built
+  YYYY-MM-DD.log             # Every factory event, append-only
+app/                         # Where the web app gets built
 Dockerfile
 docker-compose.yml
-requirements.txt
-.env.example
 ```
 
 ## License

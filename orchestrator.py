@@ -1,9 +1,4 @@
-"""
-Software Factory Orchestrator
-FastAPI webhook server + LangGraph state machine in one file.
-Receives Linear webhook events, routes them through a pipeline of
-Claude Code agents, and pauses at three human gates.
-"""
+"""Software Factory Orchestrator — FastAPI + LangGraph in one file."""
 
 import os
 import asyncio
@@ -15,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict, Annotated, Any
 from contextlib import asynccontextmanager
+from operator import itemgetter
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
@@ -22,6 +18,7 @@ import httpx
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langsmith import traceable
 
 load_dotenv()
 
@@ -67,11 +64,16 @@ STATE_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
+def _last(a: str, b: str) -> str:
+    """Reducer: keep the last non-empty value. Allows parallel branches to merge."""
+    return b if b else a
+
+
 class FactoryState(TypedDict):
-    ticket_id: str
-    title: str
-    current_state: str
-    error: str
+    ticket_id: Annotated[str, _last]
+    title: Annotated[str, _last]
+    current_state: Annotated[str, _last]
+    error: Annotated[str, _last]
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +180,7 @@ async def post_slack(message: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+@traceable(run_type="chain")
 async def run_agent(
     state: FactoryState, skill_file: str, memory_section: str,
     next_linear_state: str | None = None,
@@ -249,6 +252,7 @@ async def deploy_agent(state: FactoryState) -> FactoryState:
 # ---------------------------------------------------------------------------
 
 
+@traceable(run_type="chain")
 async def gate(state: FactoryState, gate_name: str, next_state_hint: str) -> FactoryState:
     ticket_id = state["ticket_id"]
     await post_slack(
@@ -314,6 +318,13 @@ def should_block(state: FactoryState) -> str:
     return "continue"
 
 
+def dev_fanout(state: FactoryState) -> list[str]:
+    """After dev_agent, fan out to both QA agents or block."""
+    if state.get("error") or state.get("current_state") == "Blocked":
+        return ["blocked_handler"]
+    return ["review_agent", "test_agent"]
+
+
 builder = StateGraph(FactoryState)
 
 # Nodes
@@ -336,12 +347,8 @@ builder.add_edge("gate_1", "architect_agent")
 builder.add_conditional_edges("architect_agent", should_block, {"blocked_handler": "blocked_handler", "continue": "gate_2"})
 builder.add_edge("gate_2", "dev_agent")
 
-# Fan-out: dev -> review + test in parallel
-builder.add_conditional_edges("dev_agent", should_block, {
-    "blocked_handler": "blocked_handler",
-    "continue": "review_agent",
-})
-builder.add_edge("dev_agent", "test_agent")
+# Fan-out: dev -> review + test in parallel (or block)
+builder.add_conditional_edges("dev_agent", dev_fanout)
 
 # Fan-in: both QA agents -> gate_3
 builder.add_edge("review_agent", "gate_3")
@@ -381,6 +388,7 @@ async def handle_error(ticket_id: str, error: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+@traceable(run_type="chain", name="run_pipeline")
 async def run_pipeline(ticket_id: str, title: str, state_name: str) -> None:
     # Prevent concurrent graph updates on the same thread
     if ticket_id in _active_threads:
