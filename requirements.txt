@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+langgraph
+langgraph-checkpoint-sqlite
+langsmith
+claude-agent-sdk
+httpx
+python-dotenv
+aiosqlite
