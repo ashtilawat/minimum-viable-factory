@@ -34,16 +34,19 @@ export async function GET(
 
   const encoder = new TextEncoder();
 
+  let streamController: ReadableStreamDefaultController;
+
   const stream = new ReadableStream({
     start(controller) {
+      streamController = controller;
       subscribe(boardId, controller);
       // Send an initial ping to confirm connection
       controller.enqueue(
         encoder.encode(`data: ${JSON.stringify({ type: "CONNECTED" })}\n\n`)
       );
     },
-    cancel(controller) {
-      unsubscribe(boardId, controller);
+    cancel() {
+      unsubscribe(boardId, streamController);
     },
   });
 

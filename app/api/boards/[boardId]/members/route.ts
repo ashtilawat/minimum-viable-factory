@@ -31,6 +31,11 @@ export async function POST(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
+    // Only the board owner can invite new members
+    if (board.ownerId !== session.user.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const body = await req.json();
     const parsed = inviteMemberSchema.safeParse(body);
     if (!parsed.success) {
