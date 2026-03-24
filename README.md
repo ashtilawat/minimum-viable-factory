@@ -1,10 +1,10 @@
 # Minimum Viable Factory
 
-Ticket in, deployed web app out. The full SDLC — spec, architecture, code, review, tests, deploy — handled by six Claude Code agents. You approve at three gates. One orchestrator file runs the whole thing.
+Ticket in, deployed web app out. The full SDLC — spec, architecture, code, review, tests, deploy — handled by Claude Code agents running in parallel. You approve at three gates. One orchestrator file runs the whole thing.
 
-**~500 lines of Python. 6 skills. 4 MCPs. You can read every file in one sitting.**
+**~700 lines of Python. 6 skills. 4 MCPs. You can read every file in one sitting.**
 
-Right now this factory greenfields web apps from idea to production. You describe what you want, agents build and deploy it from scratch. Brownfield support (existing codebases, new features, bug fixes) is next.
+Right now this factory greenfields web apps from idea to production. You describe what you want, agents build and deploy it from scratch. Large tasks are automatically decomposed into subtasks and built in parallel. Brownfield support (existing codebases, new features, bug fixes) is next.
 
 ## The 11 Primitives Every Software Factory Needs
 
@@ -37,11 +37,16 @@ PM Agent writes spec --> memory file
         |
 [GATE 1] Slack: "Spec ready. Move to In Arch to approve."
         |
-Architect Agent writes technical plan
+Architect Agent writes technical plan + subtasks
         |
 [GATE 2] Slack: "Architecture ready. Move to In Dev to approve."
         |
-Dev Agent writes code, opens PR
+Decompose: create Linear sub-issues from subtasks
+        |
+N × Dev Agents run in parallel (one per subtask, same branch)
+        |   --> progress comments posted to parent ticket
+        |
+Single PR opened with all changes
         |
 Review Agent + Test Agent run in parallel
         |
@@ -53,6 +58,8 @@ Done
 ```
 
 Each agent is a Claude Code session running inside Docker. It reads the full memory file, follows its skill instructions, appends its output, and moves on. No agent-to-agent chatter. The memory file is the only shared state.
+
+The key insight: the Architect breaks work into scoped subtasks (~5-10 files each), the orchestrator creates Linear sub-issues for tracking, then spins up parallel Dev Agents that each handle one subtask. This prevents timeouts on large apps and gives you visibility into progress via Linear and Slack.
 
 ## Try It
 
@@ -132,12 +139,12 @@ curl http://localhost:8000/health
 
 Write a Linear ticket describing what you want built. Move it to **In Spec**.
 
-The PM Agent writes a spec. You get a Slack message. Move to **In Arch**. The Architect plans the implementation. Move to **In Dev**. The Dev Agent writes code and opens a PR. Review and test run automatically. Move to **In Deploy**. Done.
+The PM Agent writes a spec. You get a Slack message. Move to **In Arch**. The Architect plans the implementation and breaks it into subtasks. Move to **In Dev**. The orchestrator creates Linear sub-issues, then spins up parallel Dev Agents — one per subtask. As each subtask finishes, progress is posted to the parent ticket. When all subtasks land, a single PR is opened. Review and test agents run on the combined PR. Move to **In Deploy**. Done.
 
 ## What's Inside
 
 ```
-orchestrator.py              # The whole state machine (~500 lines)
+orchestrator.py              # The whole state machine (~700 lines)
 memory/
   _template.md               # Bootstrapped for each new ticket
   LIN-xxx.md                 # One file per ticket, append-only

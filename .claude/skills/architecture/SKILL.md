@@ -47,6 +47,14 @@ _ISO 8601 timestamp_
 ### Dependencies
 - [package-name] — [why it's needed]
 - None (if no new dependencies)
+
+### Subtasks
+
+Break the implementation into independently implementable subtasks. Each subtask should take a Dev Agent <15 minutes. Order by dependency (foundational work first). Every file from "Files Affected" must appear in exactly one subtask.
+
+1. **[Subtask title]**: [1-2 sentence scope. List the specific files this subtask creates/modifies.]
+2. **[Subtask title]**: [...]
+...
 ```
 
 ## Quality Checklist
@@ -56,6 +64,9 @@ _ISO 8601 timestamp_
 - No code is written — only the plan for code
 - Dependencies are justified, not speculative
 - The approach is implementable in a single PR
+- Subtasks are ordered by dependency (foundational first)
+- Each subtask is scoped to ~5-10 files max
+- Every file from "Files Affected" appears in exactly one subtask
 
 ## MCP Usage
 
