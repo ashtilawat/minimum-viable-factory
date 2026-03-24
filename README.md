@@ -1,8 +1,18 @@
 # Minimum Viable Factory
 
-A self-running software factory. You create a Linear ticket. Claude Code agents handle everything from spec to deployed web app. Humans approve at three gates.
+Most AI agent demos show you a single agent doing a single task. This is a full factory — six agents, three human gates, one orchestrator, zero complexity you can't read in a sitting.
 
-**477 lines of orchestrator. 6 skills. 4 MCPs. That's the whole factory.**
+You create a Linear ticket. A PM agent writes the spec. An architect plans the implementation. A dev agent writes the code and opens a PR. Review and test agents run in parallel. A deploy agent ships it to Railway. You approve at three gates via Slack. That's it.
+
+**~480 lines of orchestrator. 6 skills. 4 MCPs. The factory is simpler than what it builds.**
+
+## Why Try This
+
+- **It actually runs.** This isn't a diagram or a whitepaper. Clone it, add your keys, create a ticket, and watch agents build a web app.
+- **You can read the whole thing.** The orchestrator is one file. Each skill is one page of markdown. There are no abstractions to chase.
+- **Human-in-the-loop by default.** Three gates where the pipeline pauses and waits for you. You stay in control without doing the work.
+- **Agents share memory, not messages.** Every agent reads and writes to one append-only markdown file per ticket. No agent-to-agent chatter. The memory file is the source of truth.
+- **It's a starting point.** Swap Railway for Vercel. Swap Linear for Jira. Swap the skills for your conventions. The pattern is the point.
 
 ## How It Works
 
@@ -30,7 +40,7 @@ Deploy Agent ships to Railway
 Done
 ```
 
-Each agent is a Claude Code session (via `claude-agent-sdk`) running inside Docker. Every agent reads the shared memory file, does its job, and appends its output. The orchestrator is a LangGraph state machine that routes webhooks to agents and pauses at gates.
+Each agent is a Claude Code session (via `claude-agent-sdk`) running inside Docker. The orchestrator is a LangGraph state machine that routes Linear webhooks to agents and pauses at gates.
 
 ## Prerequisites
 
@@ -183,18 +193,7 @@ Dockerfile
 docker-compose.yml
 requirements.txt
 .env.example
-PRD.md                       # Full product requirements document
 ```
-
-## What's Not Included (Yet)
-
-- Sentry (Railway logs only for now)
-- Doppler (`.env` only for now)
-- Vector DB / semantic memory search (flat files only)
-- Multi-project support (single `app/` directory)
-- Web UI for the factory itself
-- Automatic PR merge (human controls merge via Gate 3)
-- Automated Railway log watcher (agents can query logs on-demand via Railway MCP)
 
 ## License
 
