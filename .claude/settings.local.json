@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/ash/Desktop/minimum-viable-factory -type f -name *.md -o -name *.json -o -name *.py -o -name requirements.txt -o -name Dockerfile -o -name .env)",
+      "WebSearch",
+      "WebFetch(domain:inventivehq.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.langchain.com)",
+      "Bash(pip show:*)",
+      "Bash(pip list:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(unset GITHUB_TOKEN)",
+      "Bash(git push:*)",
+      "Bash(docker compose:*)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl:*)",
+      "WebFetch(domain:api.smith.langchain.com)",
+      "WebFetch(domain:langsmith-sdk.readthedocs.io)"
+    ]
+  }
+}
