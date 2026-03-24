@@ -1,0 +1,105 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String?
+  password      String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  boards        Board[]
+  boardMembers  BoardMember[]
+  comments      Comment[]
+}
+
+model Board {
+  id          String        @id @default(cuid())
+  title       String
+  bgColor     String        @default("#0079BF")
+  archived    Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  ownerId     String
+  owner       User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members     BoardMember[]
+  lists       List[]
+}
+
+model BoardMember {
+  id        String   @id @default(cuid())
+  boardId   String
+  userId    String
+  createdAt DateTime @default(now())
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, userId])
+}
+
+model List {
+  id        String   @id @default(cuid())
+  title     String
+  position  String
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  cards     Card[]
+}
+
+model Card {
+  id            String          @id @default(cuid())
+  title         String
+  description   String?
+  position      String
+  dueDate       DateTime?
+  archived      Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  listId        String
+  list          List            @relation(fields: [listId], references: [id], onDelete: Cascade)
+  labels        Label[]
+  checklistItems ChecklistItem[]
+  comments      Comment[]
+}
+
+model Label {
+  id        String   @id @default(cuid())
+  color     String
+  text      String?
+  cardId    String
+  card      Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+}
+
+model ChecklistItem {
+  id        String   @id @default(cuid())
+  text      String
+  completed Boolean  @default(false)
+  position  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cardId    String
+  card      Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  text      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cardId    String
+  authorId  String
+  card      Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+}

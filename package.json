@@ -1,0 +1,44 @@
+{
+  "name": "trello-clone",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate"
+  },
+  "dependencies": {
+    "next": "14.2.29",
+    "react": "^18",
+    "react-dom": "^18",
+    "next-auth": "^5.0.0-beta.25",
+    "@auth/prisma-adapter": "^2.7.4",
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^2.4.3",
+    "zod": "^3.23.8",
+    "@hello-pangea/dnd": "^17.0.0",
+    "fractional-indexing": "^3.2.0",
+    "@radix-ui/react-dialog": "^1.1.2",
+    "@radix-ui/react-popover": "^1.1.2",
+    "lucide-react": "^0.460.0",
+    "date-fns": "^4.1.0",
+    "swr": "^2.2.5"
+  },
+  "devDependencies": {
+    "prisma": "^5.22.0",
+    "typescript": "^5",
+    "tailwindcss": "^3.4.15",
+    "postcss": "^8",
+    "autoprefixer": "^10.0.1",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/node": "^20",
+    "@types/bcryptjs": "^2.4.6",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.29"
+  }
+}

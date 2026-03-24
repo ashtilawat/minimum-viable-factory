@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+out/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+prisma/dev.db
+
+# TypeScript
+tsconfig.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Factory internals
+factory.db*
+audit/
