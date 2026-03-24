@@ -1,0 +1,12 @@
+services:
+  factory:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./memory:/app/memory
+      - ./.claude:/app/.claude
+      - ./app:/app/app
+      - ./audit:/app/audit
+    env_file:
+      - .env
