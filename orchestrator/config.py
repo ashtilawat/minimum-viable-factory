@@ -60,32 +60,3 @@ def require_python_for_orchestrator() -> None:
             "LangGraph interrupt()/get_config() in async code need contextvar support "
             "from asyncio.create_task (Python 3.11+). Recreate the venv with python3.11."
         )
-
-
-# region agent log
-def agent_debug_log(
-    hypothesis_id: str, location: str, message: str, data: dict, run_id: str = "pre-fix"
-) -> None:
-    """Append NDJSON for Cursor debug session 3e970a."""
-    import json
-    import time
-
-    try:
-        path = REPO_ROOT / ".cursor" / "debug-3e970a.log"
-        payload = {
-            "sessionId": "3e970a",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "runId": run_id,
-            "timestamp": int(time.time() * 1000),
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-
-
-# endregion

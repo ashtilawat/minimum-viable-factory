@@ -2,7 +2,6 @@
 
 from langgraph.types import interrupt
 
-from orchestrator.config import agent_debug_log
 from orchestrator.state import FactoryState
 from orchestrator.audit import audit_log
 from orchestrator.memory import append_memory
@@ -32,22 +31,6 @@ async def gate(state: FactoryState, gate_name: str, next_state_hint: str) -> Fac
     audit_log(ticket_id, gate_name, "waiting for human approval")
     while True:
         decision = interrupt({"gate": gate_name, "ticket_id": ticket_id})
-        # region agent log
-        agent_debug_log(
-            "H1",
-            "gates.py:gate:after_interrupt",
-            "interrupt_returned",
-            {
-                "ticket_id": ticket_id,
-                "gate": gate_name,
-                "decision": decision,
-                "next_state_hint": next_state_hint,
-                "approve_if_not_blocked": decision != "Blocked",
-                "approve_matches_hint": decision == next_state_hint,
-            },
-            run_id="post-fix",
-        )
-        # endregion
 
         if decision == "Blocked":
             error_msg = f"Rejected by human at {gate_name}"
