@@ -3,7 +3,7 @@
 import httpx
 from langsmith import traceable
 
-from orchestrator.config import LINEAR_API_KEY, logger
+from orchestrator.config import LINEAR_API_KEY, logger, agent_debug_log
 from orchestrator.audit import audit_log
 
 LINEAR_GQL = "https://api.linear.app/graphql"
@@ -79,6 +79,14 @@ async def update_linear_state(ticket_id: str, state_name: str) -> None:
         % (issues[0]["id"], state_uuid)
     )
     audit_log(ticket_id, "linear_state_update", state_name)
+    # region agent log
+    agent_debug_log(
+        "H4",
+        "linear.py:update_linear_state",
+        "linear_state_update_called",
+        {"ticket_id": ticket_id, "state_name": state_name},
+    )
+    # endregion
 
 
 # ---------------------------------------------------------------------------

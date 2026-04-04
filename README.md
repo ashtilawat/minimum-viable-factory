@@ -140,7 +140,7 @@ LANGCHAIN_PROJECT=your-project-name  # optional
 LANGCHAIN_TRACING_V2=true            # optional
 AGENT_RUNTIME=codex
 WORKSPACE_DIR=workspace
-CODEX_MODEL=gpt-5.4                  # optional
+CODEX_MODEL=gpt-5.4-mini             # optional; override e.g. gpt-5.4 for heavier runs
 CODEX_STREAM_OUTPUT=true             # optional; stream codex stdout/stderr to logs (default on; set false for quiet CI)
 ```
 

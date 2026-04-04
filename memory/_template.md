@@ -1,19 +1,25 @@
 # {{TICKET_ID}} — {{TICKET_TITLE}}
 
 ## Spec
-_pending_
+
+*pending*
 
 ## Architecture Decision
-_pending_
+
+*pending*
 
 ## Implementation
-_pending_
+
+*pending*
 
 ## Code Review
-_pending_
+
+*pending*
 
 ## Test Results
-_pending_
+
+*pending*
 
 ## Deploy Log
-_pending_
+
+*pending*

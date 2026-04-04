@@ -6,7 +6,7 @@ import re
 from langsmith import traceable
 from langgraph.types import Command
 
-from orchestrator.config import AGENT_TIMEOUT, GITHUB_ORG, WORKSPACE_DIR
+from orchestrator.config import AGENT_TIMEOUT, GITHUB_ORG, WORKSPACE_DIR, agent_debug_log
 from orchestrator.state import FactoryState
 from orchestrator.audit import audit_log
 from orchestrator.memory import append_memory
@@ -146,10 +146,31 @@ async def run_pipeline(ticket_id: str, title: str, state_name: str) -> None:
 
         if existing and existing.values and existing.tasks:
             current_state = existing.values.get("current_state", "")
+            # region agent log
+            agent_debug_log(
+                "H2",
+                "pipeline.py:run_pipeline:resume_branch",
+                "graph_paused_compare",
+                {
+                    "ticket_id": ticket_id,
+                    "webhook_state_name": state_name,
+                    "graph_current_state": current_state,
+                    "states_equal": state_name == current_state,
+                },
+            )
+            # endregion
             if state_name == current_state:
                 audit_log(ticket_id, "pipeline_waiting", f"already paused at {current_state}, ignoring {state_name}")
                 return
             # Resume from interrupt
+            # region agent log
+            agent_debug_log(
+                "H1",
+                "pipeline.py:run_pipeline:before_command_resume",
+                "will_resume_with",
+                {"ticket_id": ticket_id, "resume_value": state_name},
+            )
+            # endregion
             audit_log(ticket_id, "pipeline_resume", state_name)
             await asyncio.wait_for(
                 graph.ainvoke(Command(resume=state_name), config),
