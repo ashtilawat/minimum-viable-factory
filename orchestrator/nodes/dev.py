@@ -5,10 +5,11 @@ import asyncio
 
 from langsmith import traceable
 
-from orchestrator.config import MEMORY_DIR, logger
+from orchestrator.config import MEMORY_DIR
 from orchestrator.state import FactoryState
 from orchestrator.audit import audit_log
 from orchestrator.memory import append_memory
+from orchestrator.runtime import run_runtime_prompt
 from orchestrator.slack import post_slack
 from orchestrator.linear import (
     get_issue_id,
@@ -107,23 +108,18 @@ async def dev_parallel(state: FactoryState) -> FactoryState:
     # Create the branch once before spawning parallel agents
     branch_name = f"{ticket_id}/implementation"
     workspace_path = state.get("workspace_path", "/app")
-    try:
-        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
-
-        options = ClaudeAgentOptions(
-            cwd=workspace_path,
-            permission_mode="bypassPermissions",
-            allowed_tools=["Bash"],
-        )
-        branch_prompt = (
-            f"Run these git commands to set up the branch:\n"
-            f"git checkout -b {branch_name} 2>/dev/null || git checkout {branch_name}\n"
-            f"Just run the commands and confirm the branch is ready."
-        )
-        async for _ in claude_query(prompt=branch_prompt, options=options):
-            pass
-    except ImportError:
-        logger.warning("claude-agent-sdk not available for branch creation")
+    branch_prompt = (
+        f"Run these git commands to set up the branch:\n"
+        f"git checkout -b {branch_name} 2>/dev/null || git checkout {branch_name}\n"
+        f"Just run the commands and confirm the branch is ready."
+    )
+    await run_runtime_prompt(
+        branch_prompt,
+        workspace_path,
+        "git_only",
+        fallback_output="",
+        fallback_warning="claude-agent-sdk not available for branch creation",
+    )
 
     audit_log(ticket_id, "dev_parallel_start", f"{len(subtasks)} subtasks")
 
@@ -170,34 +166,25 @@ async def dev_parallel(state: FactoryState) -> FactoryState:
 
     # Open a single PR with all changes
     audit_log(ticket_id, "dev_parallel_done", f"all {len(subtasks)} subtasks complete")
-    try:
-        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
-
-        options = ClaudeAgentOptions(
-            cwd=workspace_path,
-            permission_mode="bypassPermissions",
-            allowed_tools=["Bash", "Read", "Glob", "mcp__github__*", "mcp__linear__*"],
-        )
-        pr_prompt = (
-            f"You are working on ticket {ticket_id}: {state['title']}\n\n"
-            f"All {len(subtasks)} subtasks have been committed to branch `{branch_name}`.\n\n"
-            f"1. Push the branch to origin\n"
-            f"2. Open a single PR via GitHub MCP targeting `main` with:\n"
-            f"   - Title: `{ticket_id}: {state['title']}`\n"
-            f"   - Body summarizing all subtasks that were implemented\n"
-            f"3. Post the PR link as a comment on the Linear ticket\n\n"
-            f"Return the PR URL."
-        )
-        pr_output = []
-        async for message in claude_query(prompt=pr_prompt, options=options):
-            if hasattr(message, "content"):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        pr_output.append(block.text)
-        pr_text = "\n".join(pr_output)
+    pr_prompt = (
+        f"You are working on ticket {ticket_id}: {state['title']}\n\n"
+        f"All {len(subtasks)} subtasks have been committed to branch `{branch_name}`.\n\n"
+        f"1. Push the branch to origin\n"
+        f"2. Open a single PR via GitHub MCP targeting `main` with:\n"
+        f"   - Title: `{ticket_id}: {state['title']}`\n"
+        f"   - Body summarizing all subtasks that were implemented\n"
+        f"3. Post the PR link as a comment on the Linear ticket\n\n"
+        f"Return the PR URL."
+    )
+    pr_text = await run_runtime_prompt(
+        pr_prompt,
+        workspace_path,
+        "pr",
+        fallback_output="",
+        fallback_warning="claude-agent-sdk not available for PR creation",
+    )
+    if pr_text:
         append_memory(ticket_id, "Implementation", f"### PR\n{pr_text}")
-    except ImportError:
-        logger.warning("claude-agent-sdk not available for PR creation")
 
     await update_linear_state(ticket_id, "In QA")
     if parent_id:

@@ -1,16 +1,18 @@
-"""Core agent runner — spawns Claude Code sessions via claude-agent-sdk."""
+"""Core agent runner — spawns coding sessions via the configured runtime."""
 
 from langsmith import traceable
 
-from orchestrator.config import SKILLS_DIR, MEMORY_DIR, logger
+from orchestrator.config import SKILLS_DIR, MEMORY_DIR, AGENT_RUNTIME
 from orchestrator.state import FactoryState
 from orchestrator.audit import audit_log
 from orchestrator.memory import append_memory
+from orchestrator.runtime import run_runtime_prompt
 from orchestrator.linear import (
     update_linear_state,
     complete_stage_sub_issue,
     update_stage_progress,
     get_issue_id,
+    get_issue_context,
     comment_on_issue,
 )
 
@@ -32,10 +34,11 @@ async def run_agent(
     next_linear_state: str | None = None,
     extra_prompt: str = "",
 ) -> FactoryState:
-    """Spawn a Claude Code session for the given skill and append output to memory."""
+    """Spawn an agent session for the given skill and append output to memory."""
     ticket_id = state["ticket_id"]
     memory_content = (MEMORY_DIR / f"{ticket_id}.md").read_text()
     skill_content = (SKILLS_DIR / skill_file).read_text()
+    issue_context = await get_issue_context(ticket_id) if AGENT_RUNTIME == "codex" else {}
 
     repo_name = state.get("repo_name", "")
     workspace_path = state.get("workspace_path", "/app")
@@ -48,6 +51,20 @@ async def run_agent(
         f"## Memory File\n\n{memory_content}\n\n"
         f"## Your Skill Instructions\n\n{skill_content}"
     )
+    if AGENT_RUNTIME == "codex":
+        comments = issue_context.get("comments", [])
+        comment_block = "\n".join(f"- {comment}" for comment in comments) if comments else "- None"
+        prompt += (
+            "\n\n## Ticket Context From Orchestrator\n\n"
+            f"**Ticket Title**: {issue_context.get('title') or state['title']}\n\n"
+            f"**Description**:\n{issue_context.get('description') or 'None'}\n\n"
+            f"**Recent Comments**:\n{comment_block}\n\n"
+            "## Codex Runtime Notes\n\n"
+            "- The Linear connector is not available in this runtime. Use the ticket context above instead of trying to read Linear.\n"
+            f"- Do not edit any memory files. Return the content for `{memory_section}` in your final response only.\n"
+            "- The orchestrator will save your final response and post progress updates for you.\n"
+            "- If an external connector is unavailable, continue with the provided context instead of blocking.\n"
+        )
     if extra_prompt:
         prompt += f"\n\n{extra_prompt}"
 
@@ -70,28 +87,13 @@ async def run_agent(
             f"🟡 **{memory_section}** — agent started.",
         )
 
-    try:
-        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
-
-        options = ClaudeAgentOptions(
-            cwd=workspace_path,
-            permission_mode="bypassPermissions",
-            allowed_tools=[
-                "Read", "Write", "Edit", "Bash", "Glob", "Grep",
-                "mcp__linear__*", "mcp__github__*",
-                "mcp__vercel__*", "mcp__supabase__*", "mcp__slack__*",
-            ],
-        )
-        output_parts: list[str] = []
-        async for message in claude_query(prompt=prompt, options=options):
-            if hasattr(message, "content"):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        output_parts.append(block.text)
-        output = "\n".join(output_parts)
-    except ImportError:
-        output = f"[STUB] {memory_section} completed for {ticket_id}"
-        logger.warning("claude-agent-sdk not available, using stub")
+    output = await run_runtime_prompt(
+        prompt,
+        workspace_path,
+        "general",
+        fallback_output=f"[STUB] {memory_section} completed for {ticket_id}",
+        fallback_warning="claude-agent-sdk not available, using stub",
+    )
 
     append_memory(ticket_id, memory_section, output)
 

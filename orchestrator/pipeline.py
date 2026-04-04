@@ -6,10 +6,11 @@ import re
 from langsmith import traceable
 from langgraph.types import Command
 
-from orchestrator.config import AGENT_TIMEOUT, GITHUB_ORG, WORKSPACE_DIR, logger
+from orchestrator.config import AGENT_TIMEOUT, GITHUB_ORG, WORKSPACE_DIR
 from orchestrator.state import FactoryState
 from orchestrator.audit import audit_log
 from orchestrator.memory import append_memory
+from orchestrator.runtime import run_runtime_prompt
 from orchestrator.slack import post_slack
 from orchestrator.linear import (
     update_linear_state,
@@ -45,46 +46,40 @@ async def create_app_infra(ticket_id: str, title: str) -> tuple[str, str]:
     workspace = WORKSPACE_DIR / ticket_id
     workspace.mkdir(parents=True, exist_ok=True)
 
-    try:
-        from claude_agent_sdk import query as claude_query, ClaudeAgentOptions
-
-        options = ClaudeAgentOptions(
-            cwd=str(workspace),
-            permission_mode="bypassPermissions",
-            allowed_tools=["Bash", "mcp__github__*", "mcp__vercel__*", "mcp__supabase__*"],
-        )
-        prompt = (
-            f"Set up the infrastructure for a new app. Do these steps in order:\n\n"
-            f"## 1. Create GitHub repo\n\n"
-            f"Use the GitHub MCP to create a new repository:\n"
-            f"- Owner: `{GITHUB_ORG}`\n"
-            f"- Name: `{repo_name}`\n"
-            f"- Description: `{title} (built by software factory from {ticket_id})`\n"
-            f"- Private: false\n"
-            f"- Auto-init: true (so it has a default branch)\n\n"
-            f"Then clone it: `git clone https://github.com/{repo_full}.git .`\n\n"
-            f"If the repo already exists, just clone it.\n\n"
-            f"## 2. Create Vercel project\n\n"
-            f"Use the Vercel MCP to create a new project:\n"
-            f"- Name: `{repo_name}`\n"
-            f"- Link it to the GitHub repo `{repo_full}`\n"
-            f"- Framework preset: Next.js\n\n"
-            f"If the project already exists, skip this step.\n\n"
-            f"## 3. Provision Supabase via Vercel Marketplace\n\n"
-            f"Use the Vercel MCP or run: `vercel integration add supabase`\n"
-            f"This creates a Supabase project and auto-injects database env vars "
-            f"(POSTGRES_URL, SUPABASE_URL, SUPABASE_ANON_KEY, etc.) into the Vercel project.\n\n"
-            f"If Supabase is already provisioned (check `vercel integration list`), skip this step.\n\n"
-            f"## 4. Pull env vars\n\n"
-            f"Run `vercel env pull .env.local` to pull the auto-injected Supabase env vars "
-            f"into the workspace so agents can use them during development.\n\n"
-            f"Confirm everything is ready with `git status`."
-        )
-        async for _ in claude_query(prompt=prompt, options=options):
-            pass
-    except ImportError:
-        logger.warning("claude-agent-sdk not available, stubbing infra creation")
-        workspace.mkdir(parents=True, exist_ok=True)
+    prompt = (
+        f"Set up the infrastructure for a new app. Do these steps in order:\n\n"
+        f"## 1. Create GitHub repo\n\n"
+        f"Use the GitHub MCP to create a new repository:\n"
+        f"- Owner: `{GITHUB_ORG}`\n"
+        f"- Name: `{repo_name}`\n"
+        f"- Description: `{title} (built by software factory from {ticket_id})`\n"
+        f"- Private: false\n"
+        f"- Auto-init: true (so it has a default branch)\n\n"
+        f"Then clone it: `git clone https://github.com/{repo_full}.git .`\n\n"
+        f"If the repo already exists, just clone it.\n\n"
+        f"## 2. Create Vercel project\n\n"
+        f"Use the Vercel MCP to create a new project:\n"
+        f"- Name: `{repo_name}`\n"
+        f"- Link it to the GitHub repo `{repo_full}`\n"
+        f"- Framework preset: Next.js\n\n"
+        f"If the project already exists, skip this step.\n\n"
+        f"## 3. Provision Supabase via Vercel Marketplace\n\n"
+        f"Use the Vercel MCP or run: `vercel integration add supabase`\n"
+        f"This creates a Supabase project and auto-injects database env vars "
+        f"(POSTGRES_URL, SUPABASE_URL, SUPABASE_ANON_KEY, etc.) into the Vercel project.\n\n"
+        f"If Supabase is already provisioned (check `vercel integration list`), skip this step.\n\n"
+        f"## 4. Pull env vars\n\n"
+        f"Run `vercel env pull .env.local` to pull the auto-injected Supabase env vars "
+        f"into the workspace so agents can use them during development.\n\n"
+        f"Confirm everything is ready with `git status`."
+    )
+    await run_runtime_prompt(
+        prompt,
+        str(workspace),
+        "infra",
+        fallback_output="",
+        fallback_warning="claude-agent-sdk not available, stubbing infra creation",
+    )
 
     # Post infra creation to Linear
     issue_info = await get_issue_id(ticket_id)
@@ -150,6 +145,10 @@ async def run_pipeline(ticket_id: str, title: str, state_name: str) -> None:
         existing = await graph.aget_state(config)
 
         if existing and existing.values and existing.tasks:
+            current_state = existing.values.get("current_state", "")
+            if state_name == current_state:
+                audit_log(ticket_id, "pipeline_waiting", f"already paused at {current_state}, ignoring {state_name}")
+                return
             # Resume from interrupt
             audit_log(ticket_id, "pipeline_resume", state_name)
             await asyncio.wait_for(

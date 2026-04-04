@@ -29,8 +29,8 @@ async def gate(state: FactoryState, gate_name: str, next_state_hint: str) -> Fac
         f"Review the output and move the ticket to *{next_state_hint}* to proceed, "
         f"or *Blocked* to reject."
     )
-    audit_log(ticket_id, gate_name, "waiting for human approval")
 
+    audit_log(ticket_id, gate_name, "waiting for human approval")
     decision = interrupt({"gate": gate_name, "ticket_id": ticket_id})
 
     if decision == "Blocked":

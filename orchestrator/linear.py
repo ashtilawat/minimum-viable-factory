@@ -96,6 +96,29 @@ async def get_issue_id(ticket_id: str) -> dict | None:
     return nodes[0] if nodes else None
 
 
+async def get_issue_context(ticket_id: str) -> dict:
+    """Fetch issue description and recent comments for agent prompts."""
+    number = ticket_id.replace("LIN-", "")
+    data = await _linear_gql(
+        '{ issues(filter: { number: { eq: %s } }) { nodes { id title description comments { nodes { body } } } } }'
+        % number
+    )
+    nodes = data.get("data", {}).get("issues", {}).get("nodes", [])
+    if not nodes:
+        return {"title": "", "description": "", "comments": []}
+    issue = nodes[0]
+    comments = [
+        node.get("body", "").strip()
+        for node in issue.get("comments", {}).get("nodes", [])
+        if node.get("body", "").strip()
+    ]
+    return {
+        "title": issue.get("title", ""),
+        "description": issue.get("description", "") or "",
+        "comments": comments[:10],
+    }
+
+
 @traceable(run_type="tool", name="linear_create_sub_issue")
 async def create_sub_issue(
     parent_id: str, team_id: str, title: str, description: str

@@ -1,6 +1,6 @@
 # Minimum Viable Factory
 
-Ticket in, deployed web app out. The full SDLC — spec, architecture, code, review, tests, deploy — handled by Claude Code agents running in parallel. You approve at three gates.
+Ticket in, deployed web app out. The full SDLC — spec, architecture, code, review, tests, deploy — handled by coding agents running in parallel. You approve at three gates.
 
 **~700 lines of Python across 16 modules. 6 skills. 5 MCPs. You can read every file in one sitting.**
 
@@ -16,7 +16,7 @@ We tried to figure out the smallest set of building blocks that turns a ticket i
 | 2 | **Memory** | How agents share context | `memory/` — one markdown file per ticket, append-only |
 | 3 | **Orchestrator** | What decides who runs next | LangGraph state machine in `orchestrator/` |
 | 4 | **Execution Env** | Where agents actually run | Docker container |
-| 5 | **Agent Runtime** | The brain behind each agent | Claude Code via `claude-agent-sdk` |
+| 5 | **Agent Runtime** | The brain behind each agent | Claude Code or Codex CLI via `orchestrator/runtime.py` |
 | 6 | **Integration Layer** | How agents talk to external tools | 5 MCPs: Linear, GitHub, Vercel, Supabase, Slack |
 | 7 | **Quality Gates** | Where humans stay in the loop | LangGraph `interrupt()` + Slack notifications |
 | 8 | **Delivery Target** | Where the app gets deployed | Vercel (frontend) + Supabase (database via Vercel Marketplace) |
@@ -69,7 +69,7 @@ Deploy Agent ships to Vercel + Supabase
 🟢 Done — final summary posted with repo link + deploy URL
 ```
 
-Each agent is a Claude Code session running inside Docker. It reads the full memory file, follows its skill instructions, appends its output, and moves on. No agent-to-agent chatter. The memory file is the only shared state.
+Each agent session reads the full memory file, follows its skill instructions, appends its output, and moves on. No agent-to-agent chatter. The memory file is the only shared state.
 
 ## Linear as a Dashboard
 
@@ -111,9 +111,10 @@ Every external call is traced as a nested span under the pipeline run:
 
 ### What you need
 
-- [Docker](https://docs.docker.com/get-docker/)
+- Python 3.12+
 - [ngrok](https://ngrok.com/) (or any tunnel to expose port 8000)
-- API keys for [Anthropic](https://console.anthropic.com/), [Linear](https://linear.app/), [GitHub](https://github.com/), [Vercel](https://vercel.com/), [Supabase](https://supabase.com/), [Slack](https://api.slack.com/)
+- [Codex CLI](https://developers.openai.com/codex/cli/) logged in with your ChatGPT/Codex subscription
+- API keys for [Linear](https://linear.app/), [GitHub](https://github.com/), [Vercel](https://vercel.com/), [Supabase](https://supabase.com/), [Slack](https://api.slack.com/)
 - [LangSmith](https://smith.langchain.com/) (optional, for tracing)
 
 ### 1. Clone and add your keys
@@ -121,13 +122,11 @@ Every external call is traced as a nested span under the pipeline run:
 ```bash
 git clone https://github.com/ashtilawat/minimum-viable-factory.git
 cd minimum-viable-factory
-cp .env.example .env
 ```
 
 Fill in `.env`:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
 LINEAR_API_KEY=lin_api_...
 LINEAR_WEBHOOK_SECRET=...
 GITHUB_TOKEN=ghp_...
@@ -139,7 +138,22 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 LANGCHAIN_API_KEY=lsv2_...          # optional
 LANGCHAIN_PROJECT=your-project-name  # optional
 LANGCHAIN_TRACING_V2=true            # optional
+AGENT_RUNTIME=codex
+WORKSPACE_DIR=workspace
+CODEX_MODEL=gpt-5.4                  # optional
+CODEX_STREAM_OUTPUT=true             # optional; stream codex stdout/stderr to logs (default on; set false for quiet CI)
 ```
+
+For local subscription-based runs, log in once before starting the orchestrator:
+
+```bash
+codex login
+codex login status
+```
+
+The Codex backend translates the existing MCP definitions from `.claude/settings.json` into per-run Codex config overrides, so you do not need a separate `.codex/config.toml` just to reuse the Linear, GitHub, Vercel, Supabase, and Slack servers.
+
+While `codex exec` runs, the orchestrator logs each stdout/stderr line at INFO with `[codex:stdout]` / `[codex:stderr]` prefixes, plus start/finish lines with profile and return code. Set `CODEX_STREAM_OUTPUT=false` (or `0` / `no` / `off`) to buffer output silently until the process exits, like the previous behavior.
 
 ### 2. Set up Linear
 
@@ -175,6 +189,25 @@ Create an app at [api.slack.com/apps](https://api.slack.com/apps):
 
 ### 5. Start the factory
 
+Local-first Codex runtime:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn orchestrator:app --host 0.0.0.0 --port 8000
+```
+
+Docker remains the easiest path for the Claude runtime. Codex-in-Docker is a second phase because subscription auth needs the Codex login cache mounted into the container.
+
+For a future Codex Docker rollout, plan on:
+
+- installing the Codex CLI in the image alongside or instead of Claude Code
+- mounting the host Codex auth cache into the container user home
+- keeping `AGENT_RUNTIME=codex` and the existing `.env`-backed MCP tokens available inside the container
+
+Claude runtime in Docker:
+
 ```bash
 docker compose build
 docker compose up
@@ -199,12 +232,13 @@ Every step is logged to the Linear issue. Open it to see the full journey.
 orchestrator/
   __init__.py                # Exports FastAPI app
   config.py                  # Env vars, paths, constants
+  runtime.py                 # Claude/Codex runtime adapter
   state.py                   # LangGraph state schema + Linear state map
   audit.py                   # Append-only audit logging
   memory.py                  # Memory file init and append
   linear.py                  # Linear GraphQL API + sub-issue lifecycle
   slack.py                   # Slack webhook posts
-  agent_runner.py            # Core agent runner (claude-agent-sdk)
+  agent_runner.py            # Core agent runner (memory + Linear orchestration)
   graph.py                   # LangGraph DAG construction
   pipeline.py                # Pipeline start/resume + repo creation
   api.py                     # FastAPI endpoints
