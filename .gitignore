@@ -1,5 +1,9 @@
 .env
 factory.db
+factory.db-shm
+factory.db-wal
+.venv/
+.cursor/debug*.log
 __pycache__/
 node_modules/
 *.pyc

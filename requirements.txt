@@ -1,3 +1,4 @@
+# Orchestrator: use Python 3.11+ (LangGraph async interrupt()/get_config need 3.11 contextvars).
 fastapi
 uvicorn[standard]
 langgraph

@@ -1,6 +1,5 @@
 """Human approval gates — pause the pipeline and wait for Linear state change."""
 
-from langsmith import traceable
 from langgraph.types import interrupt
 
 from orchestrator.state import FactoryState
@@ -10,7 +9,6 @@ from orchestrator.slack import post_slack
 from orchestrator.linear import get_issue_id, comment_on_issue
 
 
-@traceable(run_type="chain", name="gate")
 async def gate(state: FactoryState, gate_name: str, next_state_hint: str) -> FactoryState:
     ticket_id = state["ticket_id"]
 

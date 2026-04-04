@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from langsmith import traceable
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from orchestrator.config import DB_PATH, logger
+from orchestrator.config import DB_PATH, logger, require_python_for_orchestrator
 from orchestrator.state import STATE_MAP
 from orchestrator.audit import audit_log
 from orchestrator.memory import init_memory
@@ -19,6 +19,7 @@ from orchestrator import pipeline
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    require_python_for_orchestrator()
     async with AsyncSqliteSaver.from_conn_string(DB_PATH) as checkpointer:
         builder = build_graph()
         pipeline.graph = builder.compile(checkpointer=checkpointer)
