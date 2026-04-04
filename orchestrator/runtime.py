@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -19,6 +20,9 @@ from orchestrator.config import (
     CODEX_BIN,
     CODEX_MODEL,
     CODEX_STREAM_OUTPUT,
+    CURSOR_BIN,
+    CURSOR_MODEL,
+    CURSOR_STREAM_OUTPUT,
     REPO_ROOT,
     logger,
 )
@@ -27,6 +31,18 @@ RuntimeProfileName = Literal["general", "infra", "git_only", "pr"]
 
 _ENV_PLACEHOLDER = re.compile(r"^\$\{([^}]+)\}$")
 _CLAUDE_SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
+
+# Serialize writes to <workspace>/.cursor/mcp.json when multiple agents share a cwd.
+_cursor_workspace_mcp_locks: dict[str, asyncio.Lock] = {}
+_cursor_mcp_lock_init = threading.Lock()
+
+
+def _workspace_mcp_lock(cwd: str) -> asyncio.Lock:
+    key = str(Path(cwd).resolve())
+    with _cursor_mcp_lock_init:
+        if key not in _cursor_workspace_mcp_locks:
+            _cursor_workspace_mcp_locks[key] = asyncio.Lock()
+    return _cursor_workspace_mcp_locks[key]
 
 
 @dataclass(frozen=True)
@@ -77,7 +93,11 @@ async def run_runtime_prompt(
         return await _run_claude_prompt(prompt, cwd, runtime_profile, fallback_output, fallback_warning)
     if runtime_name == "codex":
         return await _run_codex_prompt(prompt, cwd, runtime_profile)
-    raise RuntimeError(f"Unsupported AGENT_RUNTIME={AGENT_RUNTIME!r}. Expected 'claude' or 'codex'.")
+    if runtime_name == "cursor":
+        return await _run_cursor_prompt(prompt, cwd, runtime_profile)
+    raise RuntimeError(
+        f"Unsupported AGENT_RUNTIME={AGENT_RUNTIME!r}. Expected 'claude', 'codex', or 'cursor'."
+    )
 
 
 async def _run_claude_prompt(
@@ -110,8 +130,9 @@ async def _run_claude_prompt(
     return "\n".join(output_parts)
 
 
-async def _drain_codex_stream(
+async def _drain_subprocess_stream(
     stream: asyncio.StreamReader | None,
+    log_prefix: str,
     label: str,
     *,
     stream_output: bool,
@@ -128,13 +149,13 @@ async def _drain_codex_stream(
         chunks.append(line)
         text = line.decode("utf-8", errors="replace").rstrip("\r\n")
         if text:
-            logger.info("[codex:%s] %s", label, text)
+            logger.info("[%s:%s] %s", log_prefix, label, text)
     rest = await stream.read()
     if rest:
         chunks.append(rest)
         tail = rest.decode("utf-8", errors="replace").rstrip("\r\n")
         if tail:
-            logger.info("[codex:%s] %s", label, tail)
+            logger.info("[%s:%s] %s", log_prefix, label, tail)
     return b"".join(chunks)
 
 
@@ -182,10 +203,10 @@ async def _run_codex_prompt(
         )
         stream_out = CODEX_STREAM_OUTPUT
         stdout_task = asyncio.create_task(
-            _drain_codex_stream(process.stdout, "stdout", stream_output=stream_out)
+            _drain_subprocess_stream(process.stdout, "codex", "stdout", stream_output=stream_out)
         )
         stderr_task = asyncio.create_task(
-            _drain_codex_stream(process.stderr, "stderr", stream_output=stream_out)
+            _drain_subprocess_stream(process.stderr, "codex", "stderr", stream_output=stream_out)
         )
         try:
             await asyncio.wait_for(process.wait(), timeout=10)
@@ -205,6 +226,127 @@ async def _run_codex_prompt(
         raise
     finally:
         output_file_path.unlink(missing_ok=True)
+
+
+def _resolved_mcp_servers_for_profile(profile: RuntimeProfile) -> dict[str, dict]:
+    """Build mcpServers map for Cursor's mcp.json with env placeholders resolved to values."""
+    servers: dict[str, dict] = {}
+    for name in profile.codex_mcp_servers:
+        server = _load_claude_mcp_settings().get(name)
+        if not server or not server.get("command"):
+            continue
+        entry: dict = {"command": server["command"]}
+        if server.get("args"):
+            entry["args"] = list(server["args"])
+        env_block: dict[str, str] = {}
+        for target, raw_value in server.get("env", {}).items():
+            value = _resolve_env_value(raw_value)
+            if value:
+                env_block[target] = value
+        if env_block:
+            entry["env"] = env_block
+        servers[name] = entry
+    return servers
+
+
+async def _run_cursor_prompt(
+    prompt: str,
+    cwd: str,
+    profile: RuntimeProfile,
+) -> str:
+    """Run a prompt via Cursor Agent CLI (headless) and return stdout (final printed output).
+
+    Does not override HOME: ``agent login`` on macOS stores credentials in the user keychain,
+    which only lines up with the real home directory. MCP definitions from the profile are
+    written to ``<workspace>/.cursor/mcp.json`` with backup/restore so parallel runs on the
+    same workspace are serialized and the file is not left changed afterward.
+    """
+    cursor_path = shutil.which(CURSOR_BIN)
+    if not cursor_path:
+        raise RuntimeError(
+            f"Cursor runtime is selected, but the '{CURSOR_BIN}' CLI was not found on PATH."
+        )
+
+    base_env = _build_codex_environment(profile)
+    servers = _resolved_mcp_servers_for_profile(profile)
+
+    full_prompt = prompt
+    if AGENT_CONTEXT_FILE.exists():
+        full_prompt = (
+            "# Factory context (from CLAUDE.md)\n\n"
+            + AGENT_CONTEXT_FILE.read_text(encoding="utf-8")
+            + "\n\n---\n\n# Task\n\n"
+            + prompt
+        )
+
+    args: list[str] = [
+        cursor_path,
+        "--print",
+        "--force",
+        "--trust",
+        "--approve-mcps",
+        "--sandbox",
+        "disabled",
+        "--workspace",
+        cwd,
+    ]
+    if CURSOR_MODEL:
+        args.extend(["--model", CURSOR_MODEL])
+    args.append(full_prompt)
+
+    async def _exec_agent(env: dict[str, str]) -> str:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stream_out = CURSOR_STREAM_OUTPUT
+        stdout_task = asyncio.create_task(
+            _drain_subprocess_stream(process.stdout, "cursor", "stdout", stream_output=stream_out)
+        )
+        stderr_task = asyncio.create_task(
+            _drain_subprocess_stream(process.stderr, "cursor", "stderr", stream_output=stream_out)
+        )
+        await process.wait()
+        stdout_bytes = await stdout_task
+        stderr_bytes = await stderr_task
+        stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
+        stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+        if process.returncode != 0:
+            details = stderr or stdout or "cursor agent exited without output"
+            raise RuntimeError(f"cursor agent failed ({process.returncode}): {details}")
+        return stdout
+
+    if not servers:
+        return await _exec_agent(dict(base_env))
+
+    ws = Path(cwd).resolve()
+    cursor_dir = ws / ".cursor"
+    mcp_path = cursor_dir / "mcp.json"
+    lock = _workspace_mcp_lock(cwd)
+    async with lock:
+        had_cursor_dir = cursor_dir.exists()
+        backup = mcp_path.read_bytes() if mcp_path.exists() else None
+        try:
+            cursor_dir.mkdir(parents=True, exist_ok=True)
+            mcp_path.write_text(
+                json.dumps({"mcpServers": servers}, indent=2),
+                encoding="utf-8",
+            )
+            return await _exec_agent(dict(base_env))
+        finally:
+            if backup is not None:
+                mcp_path.write_bytes(backup)
+            else:
+                mcp_path.unlink(missing_ok=True)
+            if not had_cursor_dir:
+                try:
+                    cursor_dir.rmdir()
+                except OSError:
+                    pass
 
 
 def _codex_config_overrides(profile: RuntimeProfile, env: dict[str, str]) -> list[str]:

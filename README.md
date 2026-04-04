@@ -16,7 +16,7 @@ We tried to figure out the smallest set of building blocks that turns a ticket i
 | 2 | **Memory** | How agents share context | `memory/` — one markdown file per ticket, append-only |
 | 3 | **Orchestrator** | What decides who runs next | LangGraph state machine in `orchestrator/` |
 | 4 | **Execution Env** | Where agents actually run | Docker container |
-| 5 | **Agent Runtime** | The brain behind each agent | Claude Code or Codex CLI via `orchestrator/runtime.py` |
+| 5 | **Agent Runtime** | The brain behind each agent | Claude SDK, Codex CLI, or Cursor Agent CLI via `orchestrator/runtime.py` |
 | 6 | **Integration Layer** | How agents talk to external tools | 5 MCPs: Linear, GitHub, Vercel, Supabase, Slack |
 | 7 | **Quality Gates** | Where humans stay in the loop | LangGraph `interrupt()` + Slack notifications |
 | 8 | **Delivery Target** | Where the app gets deployed | Vercel (frontend) + Supabase (database via Vercel Marketplace) |
@@ -113,7 +113,7 @@ Every external call is traced as a nested span under the pipeline run:
 
 - Python 3.12+
 - [ngrok](https://ngrok.com/) (or any tunnel to expose port 8000)
-- [Codex CLI](https://developers.openai.com/codex/cli/) logged in with your ChatGPT/Codex subscription
+- [Codex CLI](https://developers.openai.com/codex/cli/) logged in with your ChatGPT/Codex subscription **or** [Cursor Agent CLI](https://cursor.com/cli) with `CURSOR_API_KEY` (or `agent login` — see below)
 - API keys for [Linear](https://linear.app/), [GitHub](https://github.com/), [Vercel](https://vercel.com/), [Supabase](https://supabase.com/), [Slack](https://api.slack.com/)
 - [LangSmith](https://smith.langchain.com/) (optional, for tracing)
 
@@ -142,6 +142,13 @@ AGENT_RUNTIME=codex
 WORKSPACE_DIR=workspace
 CODEX_MODEL=gpt-5.4-mini             # optional; override e.g. gpt-5.4 for heavier runs
 CODEX_STREAM_OUTPUT=true             # optional; stream codex stdout/stderr to logs (default on; set false for quiet CI)
+
+# Cursor Agent CLI (Composer 2 and other models)
+# AGENT_RUNTIME=cursor
+# CURSOR_BIN=agent                   # optional; default agent (also try cursor-agent if on PATH)
+# CURSOR_MODEL=composer-2            # optional; use composer-2-fast for default fast tier; run: agent --list-models
+# CURSOR_STREAM_OUTPUT=true          # optional; stream agent stdout/stderr (default on; same false/0/no/off as Codex)
+# CURSOR_API_KEY=...                 # recommended for headless/CI; from Cursor Dashboard API keys
 ```
 
 For local subscription-based runs, log in once before starting the orchestrator:
@@ -154,6 +161,24 @@ codex login status
 The Codex backend translates the existing MCP definitions from `.claude/settings.json` into per-run Codex config overrides, so you do not need a separate `.codex/config.toml` just to reuse the Linear, GitHub, Vercel, Supabase, and Slack servers.
 
 While `codex exec` runs, the orchestrator logs each stdout/stderr line at INFO with `[codex:stdout]` / `[codex:stderr]` prefixes, plus start/finish lines with profile and return code. Set `CODEX_STREAM_OUTPUT=false` (or `0` / `no` / `off`) to buffer output silently until the process exits, like the previous behavior.
+
+### Cursor Agent CLI (`AGENT_RUNTIME=cursor`)
+
+Install the CLI ([Cursor CLI](https://cursor.com/cli)):
+
+```bash
+curl https://cursor.com/install -fsS | bash
+```
+
+Ensure `agent` is on your `PATH` (often `~/.local/bin`). **Local auth:** `agent login` works because the subprocess keeps your real `HOME` (macOS keychain-backed sessions). For servers or CI without a login, set `CURSOR_API_KEY` in `.env` (see [Cursor docs](https://cursor.com/docs/cli/overview)).
+
+With `AGENT_RUNTIME=cursor`, the orchestrator runs `agent --print --force --trust --approve-mcps --sandbox disabled` against the ticket workspace, default model **`composer-2`** (override with `CURSOR_MODEL`; use `auto` for the CLI’s auto model). For profiles that use MCP, servers from `.claude/settings.json` are written to **`<workspace>/.cursor/mcp.json`** for the duration of the run (previous file content is restored afterward; concurrent runs on the same workspace are serialized). Env vars are resolved the same way as Codex.
+
+Log lines use `[cursor:stdout]` / `[cursor:stderr]` when `CURSOR_STREAM_OUTPUT` is on (default).
+
+**Runtime profiles:** Claude uses fine-grained allowed tools per profile (`general`, `infra`, `git_only`, `pr`). The Cursor path uses the same MCP *subset* per profile but does not map 1:1 to Claude’s tool allowlist; permissions are coarser (`--force`, sandbox disabled).
+
+**Linear context:** Like Codex, the orchestrator still injects ticket title, description, and recent comments into the prompt so agents can proceed if a connector misbehaves.
 
 ### 2. Set up Linear
 
@@ -198,13 +223,7 @@ pip install -r requirements.txt
 uvicorn orchestrator:app --host 0.0.0.0 --port 8000
 ```
 
-Docker remains the easiest path for the Claude runtime. Codex-in-Docker is a second phase because subscription auth needs the Codex login cache mounted into the container.
-
-For a future Codex Docker rollout, plan on:
-
-- installing the Codex CLI in the image alongside or instead of Claude Code
-- mounting the host Codex auth cache into the container user home
-- keeping `AGENT_RUNTIME=codex` and the existing `.env`-backed MCP tokens available inside the container
+Docker remains the easiest path for the Claude runtime. The image also installs the [Codex CLI](https://developers.openai.com/codex/cli/) (`@openai/codex`) and the [Cursor Agent CLI](https://cursor.com/cli/) (install script → `~/.local/bin/agent`). Codex auth from your host is bind-mounted (`${HOME}/.codex` → `/home/factory/.codex`). Cursor auth can use `CURSOR_API_KEY` in `.env` and/or mount `${HOME}/.cursor` → `/home/factory/.cursor` (already in `docker-compose.yml`) for file-based login state from `agent login` on the host.
 
 Claude runtime in Docker:
 
@@ -217,6 +236,25 @@ docker compose up
 curl http://localhost:8000/health
 # {"status":"ok"}
 ```
+
+Codex runtime in Docker:
+
+1. On the **host**, log in once (same as local-first): `codex login` and `codex login status`.
+2. Set `AGENT_RUNTIME=codex` in `.env` (plus your usual `CODEX_MODEL` / `CODEX_STREAM_OUTPUT` if desired).
+3. Run `docker compose build` and `docker compose up`. Compose mounts your host `~/.codex` so `codex exec` inside the container can use the same credentials; `CODEX_HOME` is set to `/home/factory/.codex`.
+4. Verify with `curl http://localhost:8000/health`.
+
+**Credential mode:** Codex can store auth in a file under `~/.codex` or in the OS keyring. The container cannot use your host keyring. If `~/.codex` is empty or auth fails, configure [Codex authentication](https://developers.openai.com/codex/auth) so credentials exist as files under `CODEX_HOME` (e.g. `auth.json`), or ensure the mounted directory contains valid auth after logging in on the host.
+
+**Troubleshooting:** If `codex exec` fails with auth errors, confirm `${HOME}` is set when you run `docker compose` (so the bind mount resolves), inspect `~/.codex` on the host, and on Linux use matching `user:` / UID in Compose if you see permission denied on the mount.
+
+Cursor runtime in Docker:
+
+1. Set `AGENT_RUNTIME=cursor` and `CURSOR_API_KEY` in `.env` (recommended), or log in on the host with `agent login` so `~/.cursor` contains auth and the Compose mount provides it in-container.
+2. Run `docker compose build` and `docker compose up`. The image installs `agent` to `/home/factory/.local/bin` (`PATH` is set in the Dockerfile).
+3. Optional: override `CURSOR_MODEL` (e.g. `composer-2-fast`) and `CURSOR_STREAM_OUTPUT` the same way as locally.
+
+If `agent` fails with auth errors, verify `CURSOR_API_KEY` is set for the container or that the `~/.cursor` mount is populated after a successful host `agent login`.
 
 ### 6. Create a ticket and watch it run
 
@@ -232,7 +270,7 @@ Every step is logged to the Linear issue. Open it to see the full journey.
 orchestrator/
   __init__.py                # Exports FastAPI app
   config.py                  # Env vars, paths, constants
-  runtime.py                 # Claude/Codex runtime adapter
+  runtime.py                 # Claude / Codex / Cursor runtime adapter
   state.py                   # LangGraph state schema + Linear state map
   audit.py                   # Append-only audit logging
   memory.py                  # Memory file init and append

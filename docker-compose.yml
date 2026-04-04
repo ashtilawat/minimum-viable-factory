@@ -8,5 +8,9 @@ services:
       - ./.claude:/app/.claude
       - ./audit:/app/audit
       - ./workspace:/app/workspace
+      - ${HOME}/.codex:/home/factory/.codex
+      - ${HOME}/.cursor:/home/factory/.cursor
+    environment:
+      CODEX_HOME: /home/factory/.codex
     env_file:
       - .env

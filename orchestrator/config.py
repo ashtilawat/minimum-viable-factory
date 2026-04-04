@@ -29,6 +29,14 @@ if _raw_codex_stream is None or _raw_codex_stream.strip() == "":
 else:
     CODEX_STREAM_OUTPUT = _raw_codex_stream.strip().lower() not in ("0", "false", "no", "off")
 
+CURSOR_BIN = os.getenv("CURSOR_BIN", "agent").strip() or "agent"
+CURSOR_MODEL = os.getenv("CURSOR_MODEL", "composer-2").strip()
+_raw_cursor_stream = os.getenv("CURSOR_STREAM_OUTPUT")
+if _raw_cursor_stream is None or _raw_cursor_stream.strip() == "":
+    CURSOR_STREAM_OUTPUT = True
+else:
+    CURSOR_STREAM_OUTPUT = _raw_cursor_stream.strip().lower() not in ("0", "false", "no", "off")
+
 # API keys and secrets
 LINEAR_API_KEY = os.getenv("LINEAR_API_KEY", "")
 LINEAR_WEBHOOK_SECRET = os.getenv("LINEAR_WEBHOOK_SECRET", "")

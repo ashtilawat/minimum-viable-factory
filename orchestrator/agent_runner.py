@@ -3,6 +3,9 @@
 from langsmith import traceable
 
 from orchestrator.config import SKILLS_DIR, MEMORY_DIR, AGENT_RUNTIME
+
+# Runtimes that do not use Claude SDK tool names; inject Linear context into the prompt.
+_NON_CLAUDE_RUNTIMES = frozenset({"codex", "cursor"})
 from orchestrator.state import FactoryState
 from orchestrator.audit import audit_log
 from orchestrator.memory import append_memory
@@ -38,7 +41,7 @@ async def run_agent(
     ticket_id = state["ticket_id"]
     memory_content = (MEMORY_DIR / f"{ticket_id}.md").read_text()
     skill_content = (SKILLS_DIR / skill_file).read_text()
-    issue_context = await get_issue_context(ticket_id) if AGENT_RUNTIME == "codex" else {}
+    issue_context = await get_issue_context(ticket_id) if AGENT_RUNTIME in _NON_CLAUDE_RUNTIMES else {}
 
     repo_name = state.get("repo_name", "")
     workspace_path = state.get("workspace_path", "/app")
@@ -51,7 +54,7 @@ async def run_agent(
         f"## Memory File\n\n{memory_content}\n\n"
         f"## Your Skill Instructions\n\n{skill_content}"
     )
-    if AGENT_RUNTIME == "codex":
+    if AGENT_RUNTIME in _NON_CLAUDE_RUNTIMES:
         comments = issue_context.get("comments", [])
         comment_block = "\n".join(f"- {comment}" for comment in comments) if comments else "- None"
         prompt += (
@@ -59,8 +62,8 @@ async def run_agent(
             f"**Ticket Title**: {issue_context.get('title') or state['title']}\n\n"
             f"**Description**:\n{issue_context.get('description') or 'None'}\n\n"
             f"**Recent Comments**:\n{comment_block}\n\n"
-            "## Codex Runtime Notes\n\n"
-            "- The Linear connector is not available in this runtime. Use the ticket context above instead of trying to read Linear.\n"
+            "## Non-Claude Runtime Notes\n\n"
+            "- Prefer MCP tools when available. If Linear is not available as a tool, use the ticket context above instead of blocking.\n"
             f"- Do not edit any memory files. Return the content for `{memory_section}` in your final response only.\n"
             "- The orchestrator will save your final response and post progress updates for you.\n"
             "- If an external connector is unavailable, continue with the provided context instead of blocking.\n"
