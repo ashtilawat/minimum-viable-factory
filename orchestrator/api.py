@@ -17,6 +17,7 @@ from orchestrator.memory import init_memory
 from orchestrator.linear import resolve_state_name
 from orchestrator.graph import build_graph
 from orchestrator import pipeline
+from orchestrator.dashboard import router as dashboard_router
 
 
 @asynccontextmanager
@@ -29,6 +30,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Software Factory", lifespan=lifespan)
+
+# Read-only Mission Control dashboard (GET /, /api/state, /api/ticket/{id}, /api/events)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")

@@ -20,7 +20,7 @@ We tried to figure out the smallest set of building blocks that turns a ticket i
 | 6 | **Integration Layer** | How agents talk to external tools | 5 MCPs: Linear, GitHub, Vercel, Supabase, Slack |
 | 7 | **Quality Gates** | Where humans stay in the loop | LangGraph `interrupt()` + Slack notifications |
 | 8 | **Delivery Target** | Where the app gets deployed | Vercel (frontend) + Supabase (database via Vercel Marketplace) |
-| 9 | **Observability** | How you see what's happening | LangSmith traces + Linear sub-issue tracking |
+| 9 | **Observability** | How you see what's happening | Mission Control dashboard + LangSmith traces + Linear sub-issue tracking |
 | 10 | **Skills** | What each agent knows how to do | `.claude/skills/` — 6 markdown files |
 | 11 | **Identity & Secrets** | How agents authenticate | `.env` file mounted into Docker |
 
@@ -181,10 +181,15 @@ docker compose build
 docker compose up
 ```
 
+Check it's up:
+
 ```bash
 curl http://localhost:8000/health
 # {"status":"ok"}
 ```
+
+Then open **Mission Control** at [http://localhost:8000](http://localhost:8000) — a
+read-only live dashboard of every run (see [below](#mission-control-dashboard)).
 
 ### 6. Create a ticket and watch it run
 
@@ -193,6 +198,49 @@ Write a Linear ticket describing what you want built. Move it to **In Spec**.
 The factory provisions the app's infrastructure — a GitHub repo scaffolded as a Next.js/TypeScript/Tailwind/Jest project, a linked Vercel project, and a Supabase database — then the PM Agent writes a spec. You get a Slack message at Gate 1. Move to **In Arch**. The Architect plans the implementation and breaks it into subtasks. Move to **In Dev**. Dev Agents build each subtask in sequence on one branch (git-safe) — progress is posted to the Linear issue. When all subtasks land, a single PR is opened. Review and test agents run on the combined PR in parallel. Move to **In Deploy**. The app deploys to Vercel (frontend) and Supabase (database, provisioned automatically via Vercel Marketplace). Done.
 
 Every step is logged to the Linear issue. Open it to see the full journey.
+
+### Run it locally (without Docker)
+
+Docker is the recommended path (it bundles Node, the Claude Code CLI, and the MCP
+servers). But you can also run the orchestrator directly for development:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Node 20+ is required for the agent sessions (claude-agent-sdk shells out to
+# the Claude Code CLI) and the npx-based MCP servers:
+npm install -g @anthropic-ai/claude-code
+
+# API keys from your .env are read automatically (config.py calls load_dotenv):
+uvicorn orchestrator:app --host 0.0.0.0 --port 8000 --reload
+```
+
+`WORKSPACE_DIR` defaults to `/app/workspace` (the container path). For local runs,
+override it to a writable directory — e.g. `export WORKSPACE_DIR=./workspace` — or
+just use Docker. Everything else (`memory/`, `audit/`, `.claude/skills/`) is read
+relative to the working directory, so run from the repo root.
+
+Point your Linear webhook at your tunnel (`ngrok http 8000`) exactly as above.
+
+## Mission Control dashboard
+
+Open [http://localhost:8000](http://localhost:8000) while the factory is running.
+It's a **read-only** live ops console — a different lens than Linear's board, built
+entirely from what the factory already writes to disk (`audit/*.log` +
+`memory/*.md`), so it makes no external calls and can't affect a run.
+
+- **Live feed** — the audit stream in real time (Server-Sent Events): agents
+  starting/finishing, subtask fan-out, gates, blocks, deploys.
+- **Action needed** — tickets currently waiting at a gate or blocked, each with the
+  exact Linear state to move to. (Approvals still happen in Linear/Slack — the
+  dashboard is read-only.)
+- **Throughput** — shipped today, in-flight, blocked, average cycle time.
+- **Fleet** — every ticket with its six-stage progress; click a row to open a drawer
+  that renders the full memory file (spec → architecture → PR → review → tests →
+  deploy).
+
+Endpoints: `GET /` (page), `/api/state`, `/api/ticket/{id}`, `/api/events` (SSE).
 
 ## What's Inside
 
@@ -209,6 +257,9 @@ orchestrator/
   graph.py                   # LangGraph DAG construction
   pipeline.py                # Pipeline start/resume + infra provisioning/validation
   api.py                     # FastAPI endpoints (webhook signature verification)
+  dashboard.py               # Read-only Mission Control (state/events from disk)
+  static/
+    dashboard.html           # Mission Control single-page UI
   nodes/
     __init__.py              # Re-exports all node functions
     agents.py                # PM, Architect, Review, Test, Deploy nodes
@@ -219,6 +270,7 @@ tests/
   test_memory.py             # append_memory data-loss regression
   test_parse_subtasks.py     # architecture -> subtask parsing
   test_graph.py              # graph wiring + routing functions
+  test_dashboard.py          # dashboard parsing / status / throughput
 memory/
   _template.md               # Bootstrapped for each new ticket
   LIN-xxx.md                 # One file per ticket, append-only
@@ -252,7 +304,9 @@ pytest -q
 ```
 
 Covered: the append-only memory (repeated writes to one section must all
-persist), the architecture → subtask parser, and the graph wiring / routing.
+persist), the architecture → subtask parser, the graph wiring / routing, and the
+Mission Control dashboard (memory/audit parsing, gate + blocked detection,
+throughput).
 
 ## License
 

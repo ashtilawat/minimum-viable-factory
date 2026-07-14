@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Software Factory · Mission Control</title>
+<style>
+  :root {
+    --bg:#0a0d13; --panel:#111621; --panel2:#0d1119; --line:#1e2634;
+    --ink:#d7dee9; --dim:#6b7788; --mut:#8a97a8;
+    --green:#3fb950; --amber:#d9a020; --red:#f0553f; --blue:#4a9eff; --violet:#a371f7;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font:13px/1.5 ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif;
+    display:flex; flex-direction:column;
+  }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  header {
+    display:flex; align-items:center; gap:16px; padding:12px 18px;
+    border-bottom:1px solid var(--line); background:var(--panel2);
+  }
+  header .brand { font-weight:700; letter-spacing:.14em; font-size:12px; }
+  header .brand b { color:var(--blue); }
+  .live { display:flex; align-items:center; gap:6px; color:var(--dim); font-size:11px; letter-spacing:.1em; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--dim); }
+  .dot.on { background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  header .stats { margin-left:auto; display:flex; gap:22px; }
+  header .stat { text-align:right; }
+  header .stat b { display:block; font-size:17px; line-height:1; font-variant-numeric:tabular-nums; }
+  header .stat span { font-size:10px; color:var(--dim); letter-spacing:.08em; text-transform:uppercase; }
+
+  main { flex:1; display:grid; grid-template-columns:1.4fr 1fr; grid-template-rows:1fr auto;
+          gap:12px; padding:12px; min-height:0; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+           display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  .panel > h2 { margin:0; padding:10px 14px; font-size:10px; letter-spacing:.16em; color:var(--mut);
+                text-transform:uppercase; border-bottom:1px solid var(--line); display:flex; gap:8px; align-items:center; }
+  .panel > h2 .count { color:var(--dim); }
+
+  #feedPanel { grid-row:1 / span 2; }
+  #feed { overflow-y:auto; padding:6px 0; }
+  .ev { display:grid; grid-template-columns:64px 18px 1fr; gap:8px; padding:3px 14px; align-items:baseline; }
+  .ev:hover { background:#0f1420; }
+  .ev .t { color:var(--dim); font-size:11px; }
+  .ev .ic { text-align:center; }
+  .ev .msg b { color:var(--ink); font-weight:600; }
+  .ev .tk { color:var(--blue); }
+  .ev.green .ic { color:var(--green); } .ev.amber .ic { color:var(--amber); }
+  .ev.red .ic { color:var(--red); } .ev.blue .ic { color:var(--blue); }
+  .ev.dim { opacity:.5; } .ev.new { animation:flash .8s; }
+  @keyframes flash { from{background:#16263a} to{background:transparent} }
+
+  #actions { overflow-y:auto; }
+  .card { margin:10px 12px; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); }
+  .card.gate { border-left:3px solid var(--amber); }
+  .card.block { border-left:3px solid var(--red); }
+  .card .row { display:flex; align-items:center; gap:8px; }
+  .card .tk { color:var(--blue); font-weight:700; }
+  .card .st { margin-left:auto; font-size:11px; color:var(--amber); }
+  .card.block .st { color:var(--red); }
+  .card .ti { color:var(--mut); margin:4px 0 8px; }
+  .card .hint { font-size:11px; color:var(--dim); }
+  .card .hint b { color:var(--ink); }
+  .empty { color:var(--dim); padding:18px 14px; font-size:12px; }
+
+  #metrics { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); }
+  #metrics .m { background:var(--panel); padding:14px; }
+  #metrics .m b { display:block; font-size:24px; font-variant-numeric:tabular-nums; line-height:1.1; }
+  #metrics .m span { font-size:10px; color:var(--dim); letter-spacing:.08em; text-transform:uppercase; }
+  #metrics .m.g b{color:var(--green)} #metrics .m.b b{color:var(--red)}
+
+  #fleetPanel { grid-column:1 / span 2; grid-row:3; max-height:38vh; }
+  #fleet { overflow-y:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-size:10px; letter-spacing:.1em; color:var(--dim); text-transform:uppercase;
+       padding:8px 14px; position:sticky; top:0; background:var(--panel); }
+  td { padding:8px 14px; border-top:1px solid var(--line); }
+  tr.row:hover { background:#0f1420; cursor:pointer; }
+  .glyphs { letter-spacing:3px; font-size:14px; }
+  .g-done{color:var(--green)} .g-active{color:var(--amber)} .g-pend{color:#2b3444}
+  .active-anim { animation:pulse 1.4s infinite; }
+  .badge { font-size:11px; padding:1px 8px; border-radius:20px; border:1px solid var(--line); }
+  .b-done{color:var(--green);border-color:#1c3a24} .b-block{color:var(--red);border-color:#3a1f1c}
+  .b-gate{color:var(--amber);border-color:#3a3218} .b-run{color:var(--blue);border-color:#173049}
+  .links a { color:var(--dim); text-decoration:none; margin-right:10px; font-size:11px; }
+  .links a:hover { color:var(--blue); }
+
+  #drawer { position:fixed; inset:0 0 0 auto; width:min(620px,92vw); background:var(--panel2);
+            border-left:1px solid var(--line); transform:translateX(100%); transition:transform .22s ease;
+            display:flex; flex-direction:column; z-index:20; }
+  #drawer.open { transform:none; box-shadow:-30px 0 60px rgba(0,0,0,.5); }
+  #drawer .dh { display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid var(--line); }
+  #drawer .dh .x { margin-left:auto; cursor:pointer; color:var(--dim); font-size:18px; }
+  #dbody { overflow-y:auto; padding:8px 16px 40px; }
+  .sec { margin:14px 0; }
+  .sec h3 { margin:0 0 4px; font-size:11px; letter-spacing:.1em; text-transform:uppercase; display:flex; gap:8px; }
+  .sec pre { margin:0; padding:10px 12px; background:var(--panel); border:1px solid var(--line);
+             border-radius:8px; white-space:pre-wrap; word-break:break-word; font-size:12px; color:var(--mut); }
+  .scrim { position:fixed; inset:0; background:rgba(0,0,0,.4); opacity:0; pointer-events:none; transition:opacity .2s; z-index:15; }
+  .scrim.open { opacity:1; pointer-events:auto; }
+  ::-webkit-scrollbar{width:9px;height:9px} ::-webkit-scrollbar-thumb{background:#1c2432;border-radius:6px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">SOFTWARE <b>FACTORY</b> · MISSION CONTROL</div>
+  <div class="live"><span class="dot" id="livedot"></span><span id="livetxt">connecting…</span></div>
+  <div class="stats" id="hstats"></div>
+</header>
+
+<main>
+  <section class="panel" id="feedPanel">
+    <h2>◉ Live feed</h2>
+    <div id="feed" class="mono"></div>
+  </section>
+
+  <section class="panel" id="actionPanel">
+    <h2>⏸ Action needed <span class="count" id="gcount"></span></h2>
+    <div id="actions"></div>
+  </section>
+
+  <section class="panel">
+    <h2>⇅ Throughput</h2>
+    <div id="metrics"></div>
+  </section>
+
+  <section class="panel" id="fleetPanel">
+    <h2>⣿ Fleet <span class="count" id="fcount"></span></h2>
+    <div id="fleet">
+      <table>
+        <thead><tr><th>Ticket</th><th>Pipeline</th><th>Stage</th><th>Links</th><th>Updated</th></tr></thead>
+        <tbody id="fleetBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim" onclick="closeDrawer()"></div>
+<aside id="drawer">
+  <div class="dh"><span class="tk mono" id="dTk"></span><span id="dTi" style="color:var(--mut)"></span><span class="x" onclick="closeDrawer()">✕</span></div>
+  <div id="dbody"></div>
+</aside>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const clock = ts => { try { return new Date(ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}); } catch { return ''; } };
+const ago = ts => { if(!ts) return '—'; const s=(Date.now()-new Date(ts))/1000;
+  if(s<60) return Math.floor(s)+'s'; if(s<3600) return Math.floor(s/60)+'m'; return Math.floor(s/3600)+'h'; };
+
+// audit event -> {icon, cls, html}. Returns null for noise we don't surface.
+function humanize(ev){
+  const {event:e, detail:d, ticket:tk} = ev;
+  const noise = ['memory_append','stage_progress','stage_sub_issue','stage_sub_issues','linear_state_update','pipeline_step_complete','memory_init','pipeline_skip'];
+  if (noise.some(n => e.startsWith(n))) return null;
+  const T = `<span class="tk">${esc(tk)}</span>`;
+  let ic='·', cls='dim', msg=`${T} <span style="color:var(--dim)">${esc(e)}</span>`;
+  if (e.startsWith('agent_start:')) { ic='▸'; cls='blue'; msg=`${T} <b>${esc(e.slice(12))}</b> — agent started`; }
+  else if (e.startsWith('agent_done:')) { ic='✓'; cls='green'; msg=`${T} <b>${esc(e.slice(11))}</b> — done`; }
+  else if (e.startsWith('subtask_done:')) { ic='✓'; cls='green'; msg=`${T} subtask <b>${esc(d)}</b> done`; }
+  else if (e==='decompose_done') { ic='⋔'; cls='blue'; msg=`${T} decomposed — <b>${esc(d)}</b>`; }
+  else if (e==='dev_parallel_start') { ic='▸'; cls='blue'; msg=`${T} build started (${esc(d)})`; }
+  else if (e==='dev_parallel_done') { ic='✓'; cls='green'; msg=`${T} <b>build complete</b>`; }
+  else if (e==='pipeline_start') { ic='◉'; cls='blue'; msg=`${T} pipeline started`; }
+  else if (e==='pipeline_resume') { ic='▸'; cls='blue'; msg=`${T} resumed — ${esc(d)}`; }
+  else if (e==='infra_created') { ic='◆'; cls='blue'; msg=`${T} infra ready — <b>${esc(d)}</b>`; }
+  else if (e==='infra_failed') { ic='✕'; cls='red'; msg=`${T} <b>infra failed</b> — ${esc(d)}`; }
+  else if (e==='webhook_received') { ic='»'; cls='dim'; msg=`${T} webhook — ${esc(d)}`; }
+  else if (e.endsWith('_approved')) { ic='✓'; cls='green'; msg=`${T} <b>${esc(e.replace('_approved',''))}</b> approved`; }
+  else if (e.startsWith('Gate ') && /wait/i.test(d)) { ic='⏸'; cls='amber'; msg=`${T} <b>${esc(e)}</b> — awaiting approval`; }
+  else if (e==='blocked') { ic='■'; cls='red'; msg=`${T} <b>BLOCKED</b> — ${esc(d)}`; }
+  else if (e==='timeout') { ic='◷'; cls='red'; msg=`${T} <b>timed out</b>`; }
+  else if (e==='error') { ic='✕'; cls='red'; msg=`${T} <b>error</b> — ${esc(d)}`; }
+  else if (e==='done') { ic='★'; cls='green'; msg=`${T} <b>DEPLOYED</b> ✓`; }
+  return {ic, cls, msg};
+}
+
+function addEvent(ev, isNew){
+  const h = humanize(ev); if(!h) return;
+  const feed = $('#feed');
+  const div = document.createElement('div');
+  div.className = `ev ${h.cls}` + (isNew?' new':'');
+  div.innerHTML = `<span class="t">${clock(ev.ts)}</span><span class="ic">${h.ic}</span><span class="msg">${h.msg}</span>`;
+  feed.appendChild(div);
+  while (feed.childElementCount > 400) feed.removeChild(feed.firstChild);
+  if (isNew) feed.scrollTop = feed.scrollHeight;
+}
+
+function stageBadge(s){
+  if(s.done) return `<span class="badge b-done">Done</span>`;
+  if(s.blocked) return `<span class="badge b-block">Blocked</span>`;
+  if(s.gate_waiting) return `<span class="badge b-gate">${esc(s.stage)}</span>`;
+  return `<span class="badge b-run">${esc(s.stage)}</span>`;
+}
+function glyphs(prog){
+  return prog.map(p => {
+    if(p.state==='done') return `<span class="g-done" title="${esc(p.stage)}">●</span>`;
+    if(p.state==='active') return `<span class="g-active active-anim" title="${esc(p.stage)}">◐</span>`;
+    return `<span class="g-pend" title="${esc(p.stage)}">○</span>`;
+  }).join('');
+}
+function links(u){
+  const a=[]; if(u.repo)a.push(`<a href="${u.repo}" target="_blank">repo↗</a>`);
+  if(u.pr)a.push(`<a href="${u.pr}" target="_blank">PR↗</a>`);
+  if(u.deploy)a.push(`<a href="${u.deploy}" target="_blank">live↗</a>`);
+  return a.join('') || '<span style="color:var(--dim)">—</span>';
+}
+
+function render(state){
+  const tp = state.throughput;
+  $('#hstats').innerHTML = `
+    <div class="stat"><b style="color:var(--green)">${tp.shipped_today}</b><span>shipped today</span></div>
+    <div class="stat"><b>${tp.in_flight}</b><span>in flight</span></div>
+    <div class="stat"><b style="color:var(--red)">${tp.blocked}</b><span>blocked</span></div>`;
+  $('#metrics').innerHTML = `
+    <div class="m g"><b>${tp.shipped_today}</b><span>shipped today</span></div>
+    <div class="m"><b>${tp.in_flight}</b><span>in flight</span></div>
+    <div class="m b"><b>${tp.blocked}</b><span>blocked</span></div>
+    <div class="m"><b>${tp.avg_cycle_min ?? '—'}${tp.avg_cycle_min?'m':''}</b><span>avg cycle</span></div>`;
+
+  // action needed = waiting gates + blocked tickets
+  const acts = [...state.gates, ...state.tickets.filter(t=>t.blocked)];
+  $('#gcount').textContent = acts.length ? `(${acts.length})` : '';
+  $('#actions').innerHTML = acts.length ? acts.map(t=>{
+    if(t.blocked) return `<div class="card block"><div class="row"><span class="tk">${esc(t.ticket_id)}</span><span class="st">BLOCKED</span></div>
+      <div class="ti">${esc(t.title||'')}</div><div class="hint">Fix and move back to the appropriate state in Linear.</div></div>`;
+    const g = (t.gate_waiting||'').split(':')[0];
+    const next = {'Gate 1':'In Arch','Gate 2':'In Dev','Gate 3':'In Deploy'}[g]||'the next state';
+    return `<div class="card gate"><div class="row"><span class="tk">${esc(t.ticket_id)}</span><span class="st">${esc(g)}</span></div>
+      <div class="ti">${esc(t.title||'')}</div><div class="hint">Approve in Linear → move to <b>${next}</b> (or <b>Blocked</b> to reject).</div></div>`;
+  }).join('') : `<div class="empty">Nothing waiting. All gates clear.</div>`;
+
+  // fleet
+  $('#fcount').textContent = state.tickets.length ? `(${state.tickets.length})` : '';
+  $('#fleetBody').innerHTML = state.tickets.map(t=>`
+    <tr class="row" onclick="openTicket('${esc(t.ticket_id)}')">
+      <td class="mono"><span class="tk">${esc(t.ticket_id)}</span> <span style="color:var(--mut)">${esc(t.title||'')}</span></td>
+      <td class="glyphs">${glyphs(t.progress)}</td>
+      <td>${stageBadge(t)}</td>
+      <td class="links">${links(t.urls)}</td>
+      <td style="color:var(--dim)">${ago(t.last_ts)}</td>
+    </tr>`).join('') || `<tr><td colspan="5" class="empty">No tickets yet. Move a Linear ticket to In Spec to start a run.</td></tr>`;
+}
+
+async function refresh(){
+  try {
+    const r = await fetch('/api/state'); const s = await r.json();
+    render(s);
+    if(!window._seeded){ window._seeded=true; (s.recent_events||[]).forEach(e=>addEvent(e,false)); $('#feed').scrollTop=$('#feed').scrollHeight; }
+  } catch(e){ /* keep last view */ }
+}
+
+async function openTicket(id){
+  const r = await fetch('/api/ticket/'+id); const t = await r.json();
+  $('#dTk').textContent = t.ticket_id; $('#dTi').textContent = t.title||'';
+  const order = ['Spec','Architecture Decision','Implementation','Code Review','Test Results','Deploy Log'];
+  const dots = {done:'<span class="g-done">●</span>', active:'<span class="g-active">◐</span>', pending:'<span class="g-pend">○</span>'};
+  const stMap = {}; (t.status.progress||[]).forEach(p=>stMap[p.section]=p.state);
+  $('#dbody').innerHTML = order.map(name=>{
+    const sec = t.sections[name]; if(!sec) return '';
+    const body = sec.filled ? esc(sec.body) : '<span style="color:var(--dim)">— pending —</span>';
+    return `<div class="sec"><h3>${dots[stMap[name]||'pending']} ${esc(name)}</h3><pre>${body}</pre></div>`;
+  }).join('') + Object.keys(t.sections).filter(n=>!order.includes(n)).map(name=>{
+    const sec=t.sections[name];
+    return `<div class="sec"><h3 style="color:var(--red)">⚑ ${esc(name)}</h3><pre>${esc(sec.body)}</pre></div>`;
+  }).join('');
+  $('#drawer').classList.add('open'); $('#scrim').classList.add('open');
+}
+function closeDrawer(){ $('#drawer').classList.remove('open'); $('#scrim').classList.remove('open'); }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDrawer(); });
+
+// live stream
+function connect(){
+  const es = new EventSource('/api/events');
+  es.onopen = ()=>{ $('#livedot').className='dot on'; $('#livetxt').textContent='LIVE'; };
+  es.onerror = ()=>{ $('#livedot').className='dot'; $('#livetxt').textContent='reconnecting…'; };
+  es.onmessage = m=>{
+    // m.data is a raw audit line: "[ts] TICKET | event | detail"
+    const mm = m.data.match(/^\[(.*?)\] (.*?) \| (.*?) \| (.*)$/);
+    if(!mm) return;
+    addEvent({ts:mm[1], ticket:mm[2], event:mm[3], detail:mm[4]}, true);
+    clearTimeout(window._deb); window._deb=setTimeout(refresh, 400); // refresh panels shortly after activity
+  };
+}
+
+refresh(); setInterval(refresh, 5000); connect();
+</script>
+</body>
+</html>
