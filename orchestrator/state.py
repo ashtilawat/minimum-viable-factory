@@ -30,11 +30,13 @@ class FactoryState(TypedDict):
     workspace_path: Annotated[str, _last]  # e.g. "/app/workspace/LIN-42"
 
 
-# Linear state name -> graph entry node
-STATE_MAP: dict[str, str] = {
-    "In Spec": "pm_agent",
-    "In Arch": "architect_agent",
-    "In Dev": "decompose",
-    "In QA": "qa_fanout",
-    "In Deploy": "deploy_agent",
-}
+# Linear states that start or resume the pipeline.
+#
+# The graph is linear and always enters at `pm_agent`; these states do NOT
+# select a graph node. Moving a ticket into "In Spec" starts a new run. The
+# other four are the gate-approval targets — moving the ticket into one is what
+# resumes the interrupted graph at the corresponding gate (see nodes/gates.py
+# and pipeline.run_pipeline's resume branch). Any other state is ignored.
+TRIGGER_STATES: frozenset[str] = frozenset(
+    {"In Spec", "In Arch", "In Dev", "In QA", "In Deploy"}
+)

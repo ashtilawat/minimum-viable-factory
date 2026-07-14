@@ -1,7 +1,6 @@
-"""Decomposition and parallel dev agent execution."""
+"""Decomposition and sequential dev agent execution."""
 
 import re
-import asyncio
 
 from langsmith import traceable
 
@@ -15,6 +14,7 @@ from orchestrator.linear import (
     comment_on_issue,
     update_linear_state,
     update_stage_progress,
+    complete_stage_sub_issue,
 )
 from orchestrator.agent_runner import run_agent
 
@@ -91,7 +91,13 @@ async def decompose(state: FactoryState) -> FactoryState:
 
 @traceable(run_type="chain", name="dev_parallel")
 async def dev_parallel(state: FactoryState) -> FactoryState:
-    """Run N dev agents in parallel, one per subtask, all on the same branch."""
+    """Run one dev agent per subtask, all committing to the same branch.
+
+    Subtasks run **sequentially**, not concurrently: they share a single git
+    working tree, and parallel `git add`/`commit` there races on `index.lock`
+    and interleaves commits. Sequential execution is also correct for the
+    dependency-ordered subtasks the architect produces (foundational first).
+    """
     ticket_id = state["ticket_id"]
     subtasks = state.get("subtasks", [])
     parent_id = state.get("parent_issue_id", "")
@@ -140,7 +146,12 @@ async def dev_parallel(state: FactoryState) -> FactoryState:
             f"Implement ONLY the files described in this subtask. "
             f"Commit with message: `{ticket_id}: {subtask_title}`"
         )
-        result = await run_agent(state, "coding/SKILL.md", "Implementation", extra_prompt=extra)
+        # post_updates=False: this node owns the single Implementation sub-issue
+        # lifecycle, so each subtask must not start/close it itself.
+        await run_agent(
+            state, "coding/SKILL.md", "Implementation",
+            extra_prompt=extra, post_updates=False,
+        )
 
         # Post progress to parent and stage sub-issue
         if parent_id:
@@ -157,16 +168,14 @@ async def dev_parallel(state: FactoryState) -> FactoryState:
         audit_log(ticket_id, f"subtask_done:{index + 1}", subtask_title)
         return subtask_title
 
-    # Run all subtasks concurrently
-    tasks = [run_subtask(i, st) for i, st in enumerate(subtasks)]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Check for failures
-    failures = [r for r in results if isinstance(r, Exception)]
-    if failures:
-        error_msg = f"{len(failures)}/{len(subtasks)} subtasks failed: {failures[0]}"
-        audit_log(ticket_id, "dev_parallel_error", error_msg)
-        return {**state, "current_state": "Blocked", "error": error_msg}
+    # Run subtasks sequentially — they share one git working tree (see docstring).
+    for i, st in enumerate(subtasks):
+        try:
+            await run_subtask(i, st)
+        except Exception as e:  # noqa: BLE001 — surface any subtask failure as Blocked
+            error_msg = f"Subtask {i + 1}/{len(subtasks)} ('{st['title']}') failed: {e}"
+            audit_log(ticket_id, "dev_parallel_error", error_msg)
+            return {**state, "current_state": "Blocked", "error": error_msg}
 
     # Open a single PR with all changes
     audit_log(ticket_id, "dev_parallel_done", f"all {len(subtasks)} subtasks complete")
@@ -210,5 +219,6 @@ async def dev_parallel(state: FactoryState) -> FactoryState:
             ticket_id, "Implementation", impl_sub,
             f"All {len(subtasks)} subtasks complete. PR opened.",
         )
+        await complete_stage_sub_issue(ticket_id, "Implementation", impl_sub)
 
-    return {**state, "current_state": "Implementation"}
+    return {**state, "current_state": "In QA"}

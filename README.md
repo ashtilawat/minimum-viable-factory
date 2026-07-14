@@ -4,7 +4,7 @@ Ticket in, deployed web app out. The full SDLC — spec, architecture, code, rev
 
 **~700 lines of Python across 16 modules. 6 skills. 5 MCPs. You can read every file in one sitting.**
 
-Right now this factory greenfields web apps from idea to production. You describe what you want, agents build and deploy it from scratch. Each app gets its own GitHub repo. Large tasks are automatically decomposed into subtasks and built in parallel. Brownfield support (existing codebases, new features, bug fixes) is next.
+Right now this factory greenfields web apps from idea to production. You describe what you want, agents build and deploy it from scratch. Each app gets its own GitHub repo, scaffolded as a Next.js + TypeScript + Tailwind + Jest project at creation. Large tasks are automatically decomposed into subtasks and built in dependency order on a shared branch, then reviewed and tested in parallel. Brownfield support (existing codebases, new features, bug fixes) is next.
 
 ## The 11 Primitives Every Software Factory Needs
 
@@ -31,9 +31,10 @@ Swap any of these out. Use Jira instead of Linear. Deploy to Railway instead of 
 ```
 Ticket created in Linear
         |
-Webhook fires --> orchestrator/api.py
+Webhook fires --> orchestrator/api.py (verifies Linear signature)
         |
-Create GitHub repo for the app
+Provision infra: GitHub repo + Vercel + Supabase + Next.js/Jest scaffold
+        |   (blocks the ticket if the repo/scaffold didn't come up)
         |
 Create 6 stage sub-issues in Linear (one per agent)
         |
@@ -51,7 +52,7 @@ Architect Agent writes technical plan + subtasks
         |
 Decompose: parse subtasks from architecture
         |
-N × Dev Agents run in parallel (one per subtask, same branch)
+N × Dev Agents run in sequence (one per subtask, same branch — git-safe)
         |   🟢 Progress posted per subtask
         |
 Single PR opened with all changes
@@ -189,7 +190,7 @@ curl http://localhost:8000/health
 
 Write a Linear ticket describing what you want built. Move it to **In Spec**.
 
-The factory creates a GitHub repo, then the PM Agent writes a spec. You get a Slack message at Gate 1. Move to **In Arch**. The Architect plans the implementation and breaks it into subtasks. Move to **In Dev**. Parallel Dev Agents build each subtask — progress is posted to the Linear issue. When all subtasks land, a single PR is opened. Review and test agents run on the combined PR. Move to **In Deploy**. The app deploys to Vercel (frontend) and Supabase (database, provisioned automatically via Vercel Marketplace). Done.
+The factory provisions the app's infrastructure — a GitHub repo scaffolded as a Next.js/TypeScript/Tailwind/Jest project, a linked Vercel project, and a Supabase database — then the PM Agent writes a spec. You get a Slack message at Gate 1. Move to **In Arch**. The Architect plans the implementation and breaks it into subtasks. Move to **In Dev**. Dev Agents build each subtask in sequence on one branch (git-safe) — progress is posted to the Linear issue. When all subtasks land, a single PR is opened. Review and test agents run on the combined PR in parallel. Move to **In Deploy**. The app deploys to Vercel (frontend) and Supabase (database, provisioned automatically via Vercel Marketplace). Done.
 
 Every step is logged to the Linear issue. Open it to see the full journey.
 
@@ -197,23 +198,27 @@ Every step is logged to the Linear issue. Open it to see the full journey.
 
 ```
 orchestrator/
-  __init__.py                # Exports FastAPI app
-  config.py                  # Env vars, paths, constants
-  state.py                   # LangGraph state schema + Linear state map
+  __init__.py                # Lazily exposes the FastAPI app
+  config.py                  # Env vars, paths, timeouts
+  state.py                   # LangGraph state schema + pipeline trigger states
   audit.py                   # Append-only audit logging
-  memory.py                  # Memory file init and append
+  memory.py                  # Memory file init + append-under-header (lock-guarded)
   linear.py                  # Linear GraphQL API + sub-issue lifecycle
   slack.py                   # Slack webhook posts
-  agent_runner.py            # Core agent runner (claude-agent-sdk)
+  agent_runner.py            # Core agent runner (claude-agent-sdk), per-agent timeout
   graph.py                   # LangGraph DAG construction
-  pipeline.py                # Pipeline start/resume + repo creation
-  api.py                     # FastAPI endpoints
+  pipeline.py                # Pipeline start/resume + infra provisioning/validation
+  api.py                     # FastAPI endpoints (webhook signature verification)
   nodes/
     __init__.py              # Re-exports all node functions
     agents.py                # PM, Architect, Review, Test, Deploy nodes
-    dev.py                   # Decompose + parallel dev execution
+    dev.py                   # Decompose + sequential dev execution
     gates.py                 # Human approval gates (interrupt/resume)
     terminal.py              # Done and blocked handlers
+tests/
+  test_memory.py             # append_memory data-loss regression
+  test_parse_subtasks.py     # architecture -> subtask parsing
+  test_graph.py              # graph wiring + routing functions
 memory/
   _template.md               # Bootstrapped for each new ticket
   LIN-xxx.md                 # One file per ticket, append-only
@@ -234,6 +239,20 @@ workspace/
 Dockerfile
 docker-compose.yml
 ```
+
+## Tests
+
+The orchestrator has a small offline test suite — it runs without any API keys or
+external services (agent sessions fall back to stubs when `claude-agent-sdk` is
+absent):
+
+```bash
+pip install -r requirements.txt pytest
+pytest -q
+```
+
+Covered: the append-only memory (repeated writes to one section must all
+persist), the architecture → subtask parser, and the graph wiring / routing.
 
 ## License
 

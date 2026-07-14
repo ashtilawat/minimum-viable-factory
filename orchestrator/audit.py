@@ -13,5 +13,6 @@ def audit_log(ticket_id: str, event: str, detail: str = "") -> None:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     ts = datetime.now(timezone.utc).isoformat()
     line = f"[{ts}] {ticket_id} | {event} | {detail}\n"
-    (AUDIT_DIR / f"{today}.log").open("a").write(line)
+    with (AUDIT_DIR / f"{today}.log").open("a") as f:
+        f.write(line)
     logger.info(line.strip())

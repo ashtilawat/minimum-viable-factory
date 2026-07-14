@@ -8,6 +8,10 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 RUN npm install -g @anthropic-ai/claude-code
 COPY orchestrator/ ./orchestrator/
-RUN useradd -m factory && chown -R factory:factory /app
+# Pre-create the bind-mount points and hand ownership to the unprivileged user,
+# so the app can write cloned repos, memory, and audit logs at runtime.
+RUN mkdir -p /app/workspace /app/memory /app/audit && \
+    useradd -m factory && \
+    chown -R factory:factory /app
 USER factory
 CMD ["uvicorn", "orchestrator:app", "--host", "0.0.0.0", "--port", "8000"]

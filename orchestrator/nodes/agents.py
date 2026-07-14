@@ -13,11 +13,17 @@ async def architect_agent(state: FactoryState) -> FactoryState:
 
 
 async def review_agent(state: FactoryState) -> FactoryState:
-    return await run_agent(state, "code-review/SKILL.md", "Code Review")
+    # review + test fan in to gate_3 — both set the same current_state so the
+    # reducer merge is deterministic regardless of finish order.
+    return await run_agent(
+        state, "code-review/SKILL.md", "Code Review", result_state="In QA"
+    )
 
 
 async def test_agent(state: FactoryState) -> FactoryState:
-    return await run_agent(state, "test-writing/SKILL.md", "Test Results")
+    return await run_agent(
+        state, "test-writing/SKILL.md", "Test Results", result_state="In QA"
+    )
 
 
 async def deploy_agent(state: FactoryState) -> FactoryState:

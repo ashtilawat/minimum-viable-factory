@@ -1,8 +1,10 @@
 """Core agent runner — spawns Claude Code sessions via claude-agent-sdk."""
 
+import asyncio
+
 from langsmith import traceable
 
-from orchestrator.config import SKILLS_DIR, MEMORY_DIR, logger
+from orchestrator.config import SKILLS_DIR, MEMORY_DIR, AGENT_TIMEOUT, logger
 from orchestrator.state import FactoryState
 from orchestrator.audit import audit_log
 from orchestrator.memory import append_memory
@@ -31,8 +33,19 @@ async def run_agent(
     memory_section: str,
     next_linear_state: str | None = None,
     extra_prompt: str = "",
+    post_updates: bool = True,
+    result_state: str | None = None,
 ) -> FactoryState:
-    """Spawn a Claude Code session for the given skill and append output to memory."""
+    """Spawn a Claude Code session for the given skill and append output to memory.
+
+    When ``post_updates`` is False the caller owns the Linear sub-issue lifecycle
+    (start/progress/done) — used by parallel dev so N subtasks don't each start,
+    comment on, and prematurely close the single Implementation sub-issue.
+
+    ``result_state`` is written to ``current_state``. Parallel branches that
+    fan in (review + test) must pass the SAME value so the merge is
+    deterministic regardless of which finishes first. Defaults to the section.
+    """
     ticket_id = state["ticket_id"]
     memory_content = (MEMORY_DIR / f"{ticket_id}.md").read_text()
     skill_content = (SKILLS_DIR / skill_file).read_text()
@@ -55,7 +68,7 @@ async def run_agent(
 
     # Post progress to the stage sub-issue
     stage_subs = state.get("stage_sub_issues", {})
-    sub_issue_id = stage_subs.get(memory_section, "")
+    sub_issue_id = stage_subs.get(memory_section, "") if post_updates else ""
     if sub_issue_id:
         await update_stage_progress(
             ticket_id, memory_section, sub_issue_id,
@@ -63,7 +76,7 @@ async def run_agent(
         )
 
     # Post "agent started" to parent issue
-    issue_info = await get_issue_id(ticket_id)
+    issue_info = await get_issue_id(ticket_id) if post_updates else None
     if issue_info:
         await comment_on_issue(
             issue_info["id"],
@@ -82,12 +95,18 @@ async def run_agent(
                 "mcp__vercel__*", "mcp__supabase__*", "mcp__slack__*",
             ],
         )
-        output_parts: list[str] = []
-        async for message in claude_query(prompt=prompt, options=options):
-            if hasattr(message, "content"):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        output_parts.append(block.text)
+        async def _collect() -> list[str]:
+            parts: list[str] = []
+            async for message in claude_query(prompt=prompt, options=options):
+                if hasattr(message, "content"):
+                    for block in message.content:
+                        if hasattr(block, "text"):
+                            parts.append(block.text)
+            return parts
+
+        # Bound each agent individually so one stalled session can't hold up the
+        # whole graph. A timeout propagates to run_pipeline -> handle_timeout.
+        output_parts = await asyncio.wait_for(_collect(), timeout=AGENT_TIMEOUT)
         output = "\n".join(output_parts)
     except ImportError:
         output = f"[STUB] {memory_section} completed for {ticket_id}"
@@ -115,4 +134,4 @@ async def run_agent(
         await complete_stage_sub_issue(ticket_id, memory_section, sub_issue_id)
 
     audit_log(ticket_id, f"agent_done:{memory_section}", f"{len(output)} chars")
-    return {**state, "current_state": memory_section}
+    return {**state, "current_state": result_state or memory_section}

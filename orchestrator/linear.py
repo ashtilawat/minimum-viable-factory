@@ -29,13 +29,27 @@ AGENT_STAGES = [
 
 @traceable(run_type="tool", name="linear_gql")
 async def _linear_gql(query: str) -> dict:
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            LINEAR_GQL,
-            json={"query": query},
-            headers={"Authorization": LINEAR_API_KEY},
-        )
-    return resp.json() if resp.status_code == 200 else {}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                LINEAR_GQL,
+                json={"query": query},
+                headers={"Authorization": LINEAR_API_KEY},
+            )
+    except httpx.HTTPError as e:
+        logger.warning("Linear request failed: %s", e)
+        return {}
+
+    if resp.status_code != 200:
+        logger.warning("Linear HTTP %s: %s", resp.status_code, resp.text[:200])
+        return {}
+
+    data = resp.json()
+    if data.get("errors"):
+        # Surface GraphQL-level errors — callers otherwise see an empty result
+        # and silently no-op (e.g. a state transition that never happened).
+        logger.warning("Linear GraphQL errors: %s", data["errors"])
+    return data
 
 
 # ---------------------------------------------------------------------------

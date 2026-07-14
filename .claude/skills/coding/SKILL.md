@@ -34,11 +34,13 @@ You are the Dev Agent. Your job is to implement the architecture decision by wri
 
 ## Conventions
 
-- **Framework**: Next.js App Router
+- **Framework**: Next.js App Router with a `src/` directory (as scaffolded at repo creation)
 - **Language**: TypeScript (strict mode)
 - **Styling**: Tailwind CSS — no custom CSS files
 - **Components**: One component per file in `src/components/`
+- **Pages/Routes**: `src/app/{route}/page.tsx`
 - **API Routes**: `src/app/api/{resource}/route.ts`
+- **Tests**: colocate under `src/**/__tests__/` (see the Test Agent conventions)
 - **Naming**: kebab-case for files, PascalCase for components, camelCase for functions
 - **Imports**: Prefer `@/` path alias
 - **No hardcoded secrets**: All sensitive values must come from environment variables
@@ -55,7 +57,7 @@ _ISO 8601 timestamp_
 ### Subtask: {subtask-title}
 
 ### Changes
-- `app/path/to/file.tsx` — [what was done]
+- `src/path/to/file.tsx` — [what was done]
 ...
 
 ### Notes
@@ -76,7 +78,7 @@ _ISO 8601 timestamp_
 [PR URL from GitHub MCP]
 
 ### Changes
-- `app/path/to/file.tsx` — [what was done]
+- `src/path/to/file.tsx` — [what was done]
 ...
 
 ### Notes

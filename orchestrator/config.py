@@ -24,7 +24,11 @@ GITHUB_ORG = os.getenv("GITHUB_ORG", "ashtilawat")
 WORKSPACE_DIR = Path("/app/workspace")
 
 # Timeouts
-AGENT_TIMEOUT = 1800  # 30 minutes
+AGENT_TIMEOUT = 1800  # 30 minutes — per individual agent session
+PIPELINE_TIMEOUT = 4 * 60 * 60  # 4 hours — overall safety cap for a graph run/
+                                # segment, which may run many agents (decompose +
+                                # N dev subtasks + review + test). Must sit well
+                                # above a single AGENT_TIMEOUT.
 
 # Logging
 logger = logging.getLogger("factory")

@@ -27,7 +27,7 @@ You are the Test Agent. Your job is to write tests for the code in the open PR, 
 - **Framework**: Jest
 - **Component testing**: React Testing Library
 - **Coverage threshold**: 80% on new code
-- **Test location**: colocate with source — `app/components/__tests__/`, `app/api/{resource}/__tests__/`
+- **Test location**: colocate with source — `src/components/__tests__/`, `src/app/api/{resource}/__tests__/`
 - **Naming**: `{filename}.test.ts` or `{filename}.test.tsx`
 
 ## What To Test
@@ -45,7 +45,7 @@ Append the following under `## Test Results` in the memory file:
 _ISO 8601 timestamp_
 
 ### Tests Written
-- `app/path/__tests__/file.test.ts` — [what it tests]
+- `src/path/__tests__/file.test.ts` — [what it tests]
 ...
 
 ### Results

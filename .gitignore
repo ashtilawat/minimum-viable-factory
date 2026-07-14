@@ -4,6 +4,7 @@ __pycache__/
 node_modules/
 *.pyc
 .claude/settings.local.json
-workspace/
+workspace/*
+!workspace/.gitkeep
 audit/
 memory/

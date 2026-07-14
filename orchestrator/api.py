@@ -1,15 +1,17 @@
 """FastAPI app — webhook endpoint and health check."""
 
+import hmac
 import json
+import hashlib
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from langsmith import traceable
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from orchestrator.config import DB_PATH, logger
-from orchestrator.state import STATE_MAP
+from orchestrator.config import DB_PATH, LINEAR_WEBHOOK_SECRET, logger
+from orchestrator.state import TRIGGER_STATES
 from orchestrator.audit import audit_log
 from orchestrator.memory import init_memory
 from orchestrator.linear import resolve_state_name
@@ -38,7 +40,21 @@ async def health():
 @app.post("/webhook/linear")
 async def webhook_linear(request: Request, background_tasks: BackgroundTasks):
     body = await request.body()
-    payload = json.loads(body)
+
+    # Verify the payload actually came from Linear (HMAC-SHA256 of the raw body).
+    if LINEAR_WEBHOOK_SECRET:
+        signature = request.headers.get("linear-signature", "")
+        expected = hmac.new(
+            LINEAR_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            logger.warning("Rejected webhook: bad or missing Linear-Signature")
+            raise HTTPException(status_code=401, detail="invalid signature")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
 
     # Only process issue state changes
     if payload.get("type") != "Issue" or payload.get("action") != "update":
@@ -51,7 +67,7 @@ async def webhook_linear(request: Request, background_tasks: BackgroundTasks):
 
     # Resolve the Linear state name from UUID
     state_name = await resolve_state_name(state_id)
-    if not state_name or state_name not in STATE_MAP:
+    if not state_name or state_name not in TRIGGER_STATES:
         return {"ok": True, "skipped": True, "state": state_name}
 
     # Extract ticket info
