@@ -2,6 +2,7 @@
 factory.db
 __pycache__/
 node_modules/
+ping/.next/
 *.pyc
 .claude/settings.local.json
 workspace/*

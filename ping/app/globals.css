@@ -1,0 +1,109 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  background: #0f1117;
+  color: #e8eaed;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 2rem;
+  text-align: center;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 2rem;
+  letter-spacing: 0.15em;
+}
+
+.puzzle-id {
+  margin: 0.25rem 0 1rem;
+  color: #9aa0a6;
+  font-size: 0.95rem;
+}
+
+.rules {
+  margin: 0 0 1.25rem;
+  font-size: 0.95rem;
+  color: #bdc1c6;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 3px;
+  margin: 0 auto;
+  max-width: 480px;
+}
+
+.cell {
+  aspect-ratio: 1;
+  border: 1px solid #3c4043;
+  background: #1a1d24;
+  color: #8ab4f8;
+  font-size: clamp(0.55rem, 2vw, 0.85rem);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+
+.cell:hover:not(:disabled) {
+  background: #2a2f3a;
+}
+
+.cell.used {
+  background: #263238;
+  border-color: #5f6368;
+  cursor: default;
+}
+
+.cell.locked {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cell:disabled {
+  cursor: not-allowed;
+}
+
+.result {
+  margin: 1rem 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.share-button {
+  margin-top: 0.75rem;
+  padding: 0.6rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  background: #8ab4f8;
+  color: #0f1117;
+  cursor: pointer;
+}
+
+.share-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.share-button:not(:disabled):hover {
+  background: #aecbfa;
+}
